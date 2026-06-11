@@ -1,3 +1,8 @@
+/*
+npm install
+npm run dev
+*/
+
 export type UserType = 'candidate' | 'company' | 'university' | 'unknown'
 
 export type EvidenceLevel =
@@ -41,11 +46,11 @@ export interface EvidenceItem {
 }
 
 export interface SkillClaim {
-  skillName: string
-  claimedLevel: 'beginner' | 'intermediate' | 'advanced' | 'unknown'
-  context: string
-  rawUserText: string
-  confidence: number
+  skillName: string //The name of the skill the user mentioned.
+  claimedLevel: 'beginner' | 'intermediate' | 'advanced' | 'unknown' //The level the user claimed for the skill.
+  context: string //The context in which the skill was mentioned.
+  rawUserText: string //The raw text from the user.
+  confidence: number //How confident the system is in this claim. Usually between 0 and 1.
 }
 
 export interface SkillNode {
@@ -60,6 +65,37 @@ export interface SkillNode {
   createdAt: number
   updatedAt: number
 }
+
+/**
+Example: 
+
+const claim: SkillClaim = {
+  skillName: "Python",
+  claimedLevel: "intermediate",
+  context: "AI projects",
+  rawUserText: "I use Python for AI projects",
+  confidence: 0.35
+}
+
+const node: SkillNode = {
+  id: "python",
+  label: "Python",
+  type: "technical_skill",
+  confidence: 0.72,
+  evidenceLevel: "conversation_verified",
+  evidence: [
+    {
+      type: "answer",
+      text: "Candidate explained Python usage with practical project context.",
+      strength: 0.72
+    }
+  ],
+  sourceMessages: [],
+  relatedProjects: [],
+  createdAt: Date.now(),
+  updatedAt: Date.now()
+}
+ */
 
 export interface GraphEdge {
   id: string
@@ -80,6 +116,32 @@ export interface SuperNode {
   confidence: number
   evidence: EvidenceItem[]
 }
+
+/**
+  Node is a fact: 
+  Candidate knows Python.
+  Candidate built a Proof of Delivery app.
+  Candidate has field testing experience.
+
+  Edge is a relationship: 
+  The Proof of Delivery app supports Python.
+  Prototype building empowers field testing.
+  Self-learning empowers prototype building.
+
+  so instead of saying: 
+  candidate skills = Python, React Native, OpenCV
+
+  it say: 
+  Candidate built a real project.
+  That project used Python, React Native, and OpenCV.
+  Because it involved real users, it also shows field testing.
+  Because they learned tools independently, it suggests self-learning.
+  Together, these suggest a higher-level pattern: High-Agency Builder.
+
+  A SuperNode is a cluster or pattern detected across multiple nodes.
+  example: High-Agency Builder
+  contains: ["self_learning", "prototype_building", "field_testing"]
+ */
 
 export interface TalentGraph {
   id: string
@@ -103,6 +165,12 @@ export interface CandidateProfile {
   preferences: Record<string, string>
   missingInfo: string[]
   confidence: number
+  // Candidate capability graph backbone (Step 1) — optional, additive.
+  domain?: CandidateDomain
+  targetDirection?: string
+  capabilityClaims?: CapabilityClaim[]
+  meaningfulExperiences?: MeaningfulExperience[]
+  interviewSummary?: string
 }
 
 export interface ProjectEvidence {
@@ -174,6 +242,11 @@ export interface UserSession {
   verificationQueue: string[]
   createdAt: number
   updatedAt: number
+  // Candidate capability graph backbone (Step 1 wiring).
+  capabilityGraph: CandidateCapabilityGraph | null
+  candidateDomain: CandidateDomain | null
+  targetDirection: string | null
+  readyToBuild: boolean
 }
 
 export type IntakeProgress = {
@@ -182,4 +255,96 @@ export type IntakeProgress = {
   claimsVerified: boolean
   graphGenerated: boolean
   matchReady: boolean
+}
+
+// ─── Candidate Capability Graph backbone (Step 1) ──────────────────
+// Cross-domain, candidate-only capability/experience model. Additive:
+// existing skill/project types above remain valid for current pages.
+
+export type CandidateDomain =
+  | 'technology'
+  | 'healthcare'
+  | 'creative'
+  | 'business'
+  | 'education'
+  | 'research'
+  | 'operations'
+  | 'general'
+
+export type MeaningfulExperienceKind =
+  | 'internship'
+  | 'placement'
+  | 'portfolio'
+  | 'assignment'
+  | 'case_work'
+  | 'customer_interaction'
+  | 'leadership'
+  | 'research'
+  | 'volunteering'
+  | 'other'
+
+export interface CapabilityClaim {
+  id: string
+  label: string
+  domain: CandidateDomain
+  rawText: string
+  confidence: number
+  evidenceLevel: EvidenceLevel
+  sourceMessageIds: string[]
+}
+
+export interface MeaningfulExperience {
+  id: string
+  title: string
+  kind: MeaningfulExperienceKind
+  organization?: string
+  description: string
+  outcomes: string[]
+  domain: CandidateDomain
+  sourceMessageIds: string[]
+}
+
+export type CapabilityNodeType =
+  | 'capability'
+  | 'experience'
+  | 'outcome'
+  | 'context'
+  | 'target_direction'
+  | 'evidence_gap'
+  | 'trait'
+
+export interface CapabilityNode {
+  id: string
+  type: CapabilityNodeType
+  label: string
+  domain?: CandidateDomain
+  confidence: number
+  evidenceLevel?: EvidenceLevel
+  description?: string
+}
+
+export type CapabilityEdgeType =
+  | 'demonstrates'
+  | 'supports'
+  | 'transfers_to'
+  | 'produced'
+  | 'performed_in'
+  | 'indicates'
+  | 'needs_evidence'
+
+export interface CapabilityEdge {
+  id: string
+  from: string // CapabilityNode.id
+  to: string // CapabilityNode.id
+  type: CapabilityEdgeType
+  weight?: number
+  reason?: string
+}
+
+export interface CandidateCapabilityGraph {
+  nodes: CapabilityNode[]
+  edges: CapabilityEdge[]
+  confidence: number
+  missingEvidence: string[]
+  generatedAt: number
 }

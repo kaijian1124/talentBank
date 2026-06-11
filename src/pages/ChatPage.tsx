@@ -1,28 +1,27 @@
 import { useState, useRef, useEffect } from 'react'
 import { useSessionStore } from '../store/sessionStore'
-import { Send, Loader2, CheckCircle2, Circle, Zap } from 'lucide-react'
+import { Send, Loader2, CheckCircle2, Circle, Zap, Network } from 'lucide-react'
 import {
   classifyUserType, getIntakeQuestion, getIntakeLength,
-  extractSkillsFromText, getVerificationQuestion,
-  evaluateVerificationAnswer, generateSkillNode,
-  extractCandidateProfile, extractCompanyProfile,
-  generateConfirmationSummary, generateChatResponse,
+  extractCompanyProfile, generateChatResponse,
 } from '../services/mockLlm'
 import { buildTalentGraph } from '../services/graphService'
 import { matchCandidateToCompany } from '../services/matchingService'
 import { demoCompanyProfile } from '../services/mockData'
-import type { CandidateProfile } from '../types'
+import {
+  getNextQuestion, buildCapabilityGraph, mergeGraphDelta, toGraphSummary,
+} from '../services/candidateAnalysis'
+import type { CandidateProfile, ChatMessage } from '../types'
 
 export default function ChatPage() {
   const {
     session, progress, isLoading, isVerifying, verifyingSkill,
     addMessage, setUserType, incrementStep, setLoading,
-    startVerification, endVerification, setProfile, setGraph, setMatchResult,
-    updateProgress,
+    setProfile, setGraph, setMatchResult,
+    setCapabilityGraph, setCandidateMeta,
   } = useSessionStore()
 
   const [input, setInput] = useState('')
-  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const hasInitialized = useRef(false)
 
@@ -39,14 +38,64 @@ export default function ChatPage() {
 
   if (!session) return null
 
+  // ─── Candidate path (real LLM via local API) ──────────────────────
+  const handleCandidateTurn = async (text: string, priorMessages: ChatMessage[]) => {
+    const s = useSessionStore.getState().session
+    if (!s) return
+    try {
+      const res = await getNextQuestion({
+        messages: priorMessages,
+        latestUserMessage: text,
+        graphSummary: toGraphSummary(s.capabilityGraph),
+        domain: s.candidateDomain ?? undefined,
+        targetDirection: s.targetDirection ?? null,
+      })
+      addMessage('assistant', res.nextQuestion)
+      setCandidateMeta({
+        domain: res.detectedDomain,
+        targetDirection: res.targetDirection,
+        readyToBuild: res.readyToBuild,
+      })
+      if (res.readyToBuild && !s.capabilityGraph) {
+        addMessage('assistant', "I have enough to draft your capability graph. Click **Build Capability Graph** in the sidebar whenever you're ready — or keep telling me more.")
+      }
+    } catch (e) {
+      addMessage('assistant', `⚠️ I couldn't reach the analysis service. ${(e as Error).message}\n\nMake sure the API server is running (\`npm run dev\`) and your key is set in \`.env.local\`.`)
+    }
+  }
+
+  const handleBuildGraph = async () => {
+    const s = useSessionStore.getState().session
+    if (!s || isLoading) return
+    setLoading(true)
+    try {
+      const lastUser = [...s.messages].reverse().find(m => m.role === 'user')?.content
+        ?? 'Build my capability graph from the conversation so far.'
+      const delta = await buildCapabilityGraph({
+        messages: s.messages,
+        latestUserMessage: lastUser,
+        graphSummary: toGraphSummary(s.capabilityGraph),
+        domain: s.candidateDomain ?? undefined,
+        targetDirection: s.targetDirection ?? null,
+      })
+      const merged = mergeGraphDelta(s.capabilityGraph, delta)
+      setCapabilityGraph(merged)
+      addMessage('assistant', `✅ Capability graph updated — **${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening your graph...`)
+      window.dispatchEvent(new CustomEvent('goto', { detail: 'graph' }))
+    } catch (e) {
+      addMessage('assistant', `⚠️ Build failed. ${(e as Error).message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleSend = async () => {
     const text = input.trim()
     if (!text || isLoading) return
     setInput('')
+    const priorMessages = session.messages
     addMessage('user', text)
     setLoading(true)
-
-    await delay(600)
 
     try {
       // Step 1: detect user type if unknown
@@ -58,105 +107,60 @@ export default function ChatPage() {
           return
         }
         setUserType(detected)
+
+        if (detected === 'candidate') {
+          addMessage('assistant', "Got it — I'll set you up as a **Candidate**. I'll ask adaptive questions to turn your real experiences into evidence of capability.")
+          await handleCandidateTurn(text, priorMessages)
+          setLoading(false)
+          return
+        }
+
+        // Company / University use the existing demo intake flow.
         const firstQ = getIntakeQuestion(detected, 0)
         addMessage('assistant', `Got it — I'll set you up as a **${capitalise(detected)}**.\n\n*(1/${getIntakeLength(detected)})* ${firstQ}`)
         setLoading(false)
         return
       }
 
-      // Step 2: handle verification
-      if (isVerifying && verifyingSkill) {
-        const result = evaluateVerificationAnswer(verifyingSkill, text)
-        const node = generateSkillNode(verifyingSkill, result.confidence, result.evidenceText)
-
-        // Add verified node to profile
-        const currentProfile = session.structuredProfile as CandidateProfile | null
-        if (currentProfile && 'verifiedSkills' in currentProfile) {
-          const updated: CandidateProfile = {
-            ...currentProfile,
-            verifiedSkills: [...currentProfile.verifiedSkills.filter(n => n.id !== node.id), node],
-          }
-          setProfile(updated)
-        }
-
-        endVerification()
-        addMessage('assistant', `${result.feedback}\n\nLet's continue building your profile. What else would you like to add, or shall I generate your Talent Graph now?`)
-        updateProgress('claimsVerified', true)
+      // Candidate turns are fully handled by the real LLM.
+      if (session.userType === 'candidate') {
+        await handleCandidateTurn(text, priorMessages)
         setLoading(false)
         return
       }
 
-      // Step 3: confirmation step
-      if (awaitingConfirmation) {
-        const lower = text.toLowerCase()
-        if (lower.match(/yes|correct|looks good|confirm|ok|sure|right/)) {
-          setAwaitingConfirmation(false)
-          addMessage('assistant', "Great! Generating your **Talent Graph** now... 🔮")
-          await delay(800)
+      // ===== Company / University demo flow (mock) =====
+      await delay(600)
 
-          const profile = session.structuredProfile as CandidateProfile
-          const graph = buildTalentGraph(profile, session.id)
-          setGraph(graph)
-
-          addMessage('assistant', `Your Talent Graph is ready! I found **${graph.nodes.length} skill nodes**, **${graph.edges.length} edges**, and **${graph.superNodes.length} super node(s)**.\n\nShall I match you against a demo company role now?`)
-        } else {
-          setAwaitingConfirmation(false)
-          addMessage('assistant', "No problem — what would you like to correct or add?")
-        }
-        setLoading(false)
-        return
-      }
-
-      // Step 4: check if user wants to generate graph or run match
       const lower = text.toLowerCase()
+
+      // Generate graph trigger
       if (lower.match(/generate graph|build graph|ready|show graph|yes.*graph/)) {
         const msgs = session.messages.filter(m => m.role === 'user').map(m => m.content)
-        const profile = session.userType === 'candidate'
-          ? extractCandidateProfile(msgs)
-          : extractCompanyProfile(msgs)
+        const profile = extractCompanyProfile(msgs)
         setProfile(profile)
-
-        if (session.userType === 'candidate') {
-          const summary = generateConfirmationSummary(profile as CandidateProfile)
-          setAwaitingConfirmation(true)
-          addMessage('assistant', summary)
-        } else {
-          const graph = buildTalentGraph(profile as CandidateProfile, session.id)
-          setGraph(graph)
-          addMessage('assistant', "Your context has been captured. Graph generated!")
-        }
+        const graph = buildTalentGraph(profile as unknown as CandidateProfile, session.id)
+        setGraph(graph)
+        addMessage('assistant', "Your context has been captured. Graph generated!")
         setLoading(false)
         return
       }
 
+      // Match trigger
       if (lower.match(/match|compare|fit score|yes.*match|run match/)) {
-        const profile = session.structuredProfile as CandidateProfile
+        const profile = session.structuredProfile as unknown as CandidateProfile
         const graph = session.graph ?? buildTalentGraph(profile, session.id)
         if (!session.graph) setGraph(graph)
 
         const result = matchCandidateToCompany(graph, demoCompanyProfile)
         setMatchResult(result)
-        addMessage('assistant', `Match complete! Your fit score is **${result.fitScore}/100** (${result.fitLevel.replace('_', ' ')}). Navigating to your match result...`)
+        addMessage('assistant', `Match complete! Fit score is **${result.fitScore}/100** (${result.fitLevel.replace('_', ' ')}). Navigating to your match result...`)
         setLoading(false)
         return
       }
 
-      // Step 5: normal intake flow
-      const step = session.intakeStep
+      // Normal intake flow
       const total = getIntakeLength(session.userType)
-
-      // Check for skill mentions to queue verification
-      const skills = extractSkillsFromText(text)
-      if (skills.length > 0 && session.userType === 'candidate' && step >= 2 && step < total - 1) {
-        incrementStep()
-        const skill = skills[0]
-        const verifyQ = getVerificationQuestion(skill)
-        startVerification(skill)
-        addMessage('assistant', `I noticed you mentioned **${skill}**. Great — I'll ask a few practical questions to place this skill accurately in your Talent Graph.\n\n${verifyQ}`)
-        setLoading(false)
-        return
-      }
-
       incrementStep()
       const newStep = session.intakeStep + 1
       const response = generateChatResponse(session.userType, newStep, text, false)
@@ -165,17 +169,8 @@ export default function ChatPage() {
       // Auto-extract profile near end of intake
       if (newStep >= total - 1) {
         const msgs = session.messages.filter(m => m.role === 'user').map(m => m.content)
-        const profile = session.userType === 'candidate'
-          ? extractCandidateProfile([...msgs, text])
-          : extractCompanyProfile([...msgs, text])
+        const profile = extractCompanyProfile([...msgs, text])
         setProfile(profile)
-
-        if (session.userType === 'candidate') {
-          await delay(400)
-          const summary = generateConfirmationSummary(profile as CandidateProfile)
-          setAwaitingConfirmation(true)
-          addMessage('assistant', summary)
-        }
       }
     } finally {
       setLoading(false)
@@ -226,6 +221,38 @@ export default function ChatPage() {
           </div>
         )}
 
+        {session.userType === 'candidate' && (
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 flex flex-col gap-2">
+            <div>
+              <p className="text-xs text-gray-500">Domain</p>
+              <p className="text-gray-200 text-sm font-medium capitalize">{session.candidateDomain ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Target direction</p>
+              <p className="text-gray-200 text-sm font-medium">{session.targetDirection ?? '—'}</p>
+            </div>
+            <button
+              onClick={handleBuildGraph}
+              disabled={isLoading}
+              className="mt-1 bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold px-3 py-2 rounded-lg transition-colors flex items-center justify-center gap-2"
+            >
+              <Network size={14} />
+              {session.capabilityGraph ? 'Update Capability Graph' : 'Build Capability Graph'}
+            </button>
+            {session.readyToBuild && !session.capabilityGraph && (
+              <p className="text-violet-400 text-[11px] text-center">Ready to build from this conversation.</p>
+            )}
+            {session.capabilityGraph && (
+              <button
+                onClick={() => window.dispatchEvent(new CustomEvent('goto', { detail: 'graph' }))}
+                className="text-violet-400 hover:text-violet-300 text-xs"
+              >
+                View graph →
+              </button>
+            )}
+          </div>
+        )}
+
         {isVerifying && verifyingSkill && (
           <div className="bg-amber-950 border border-amber-800 rounded-lg p-3">
             <div className="flex items-center gap-1.5 mb-1">
@@ -236,10 +263,10 @@ export default function ChatPage() {
           </div>
         )}
 
-        {progress.graphGenerated && (
+        {progress.graphGenerated && session.userType !== 'candidate' && (
           <button
             onClick={() => {
-              const profile = session.structuredProfile as CandidateProfile
+              const profile = session.structuredProfile as unknown as CandidateProfile
               const graph = session.graph ?? buildTalentGraph(profile, session.id)
               const result = matchCandidateToCompany(graph, demoCompanyProfile)
               setMatchResult(result)

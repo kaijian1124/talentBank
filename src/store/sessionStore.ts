@@ -2,7 +2,8 @@ import { create } from 'zustand'
 import { v4 as uuidv4 } from 'uuid'
 import type {
   UserSession, UserType, ChatMessage,
-  CandidateProfile, CompanyProfile, TalentGraph, MatchResult
+  CandidateProfile, CompanyProfile, TalentGraph, MatchResult,
+  CandidateCapabilityGraph, CandidateDomain,
 } from '../types'
 import type { IntakeProgress } from '../types'
 
@@ -19,6 +20,8 @@ interface SessionStore {
   addMessage: (role: 'user' | 'assistant', content: string) => void
   setProfile: (profile: CandidateProfile | CompanyProfile) => void
   setGraph: (graph: TalentGraph) => void
+  setCapabilityGraph: (graph: CandidateCapabilityGraph) => void
+  setCandidateMeta: (meta: { domain?: CandidateDomain | null; targetDirection?: string | null; readyToBuild?: boolean }) => void
   setMatchResult: (result: MatchResult) => void
   incrementStep: () => void
   setLoading: (val: boolean) => void
@@ -49,6 +52,10 @@ function makeSession(): UserSession {
     verificationQueue: [],
     createdAt: now,
     updatedAt: now,
+    capabilityGraph: null,
+    candidateDomain: null,
+    targetDirection: null,
+    readyToBuild: false,
   }
 }
 
@@ -96,6 +103,22 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   setGraph: (graph) => set(state => ({
     session: state.session ? { ...state.session, graph } : null,
     progress: { ...state.progress, graphGenerated: true },
+  })),
+
+  setCapabilityGraph: (graph) => set(state => ({
+    session: state.session ? { ...state.session, capabilityGraph: graph } : null,
+    progress: { ...state.progress, graphGenerated: true },
+  })),
+
+  setCandidateMeta: (meta) => set(state => ({
+    session: state.session
+      ? {
+          ...state.session,
+          candidateDomain: meta.domain !== undefined ? meta.domain : state.session.candidateDomain,
+          targetDirection: meta.targetDirection !== undefined ? meta.targetDirection : state.session.targetDirection,
+          readyToBuild: meta.readyToBuild !== undefined ? meta.readyToBuild : state.session.readyToBuild,
+        }
+      : null,
   })),
 
   setMatchResult: (result) => set(state => ({
