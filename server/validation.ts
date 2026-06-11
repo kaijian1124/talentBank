@@ -75,15 +75,54 @@ export function validateGraphEdges(
   return { edges, dropped }
 }
 
-// Apply edge validation to a full GraphBuildResponse, returning a cleaned copy.
+// Ensure every extracted capability/experience is represented as a graph node.
+// The LLM returns these in dedicated arrays; mirroring them into `newNodes`
+// (when not already present) guarantees a complete graph and keeps edges that
+// reference their ids from being dropped during validation.
+export function synthesizeNodesFromClaims(resp: GraphBuildResponse): CapabilityNode[] {
+  const byId = new Map<string, CapabilityNode>()
+  for (const n of resp.newNodes ?? []) byId.set(n.id, n)
+
+  for (const c of resp.newCapabilities ?? []) {
+    if (!byId.has(c.id)) {
+      byId.set(c.id, {
+        id: c.id,
+        type: 'capability',
+        label: c.label,
+        domain: c.domain,
+        confidence: c.confidence,
+        evidenceLevel: c.evidenceLevel,
+        description: c.rawText,
+      })
+    }
+  }
+
+  for (const e of resp.newExperiences ?? []) {
+    if (!byId.has(e.id)) {
+      byId.set(e.id, {
+        id: e.id,
+        type: 'experience',
+        label: e.title,
+        domain: e.domain,
+        confidence: resp.confidence,
+        description: e.description,
+      })
+    }
+  }
+
+  return [...byId.values()]
+}
+
+// Apply node synthesis + edge validation to a full GraphBuildResponse.
 export function sanitizeGraphBuildResponse(
   resp: GraphBuildResponse,
   existingSummary: GraphSummaryItem[] = []
 ): { response: GraphBuildResponse; droppedEdges: number } {
+  const newNodes = synthesizeNodesFromClaims(resp)
   const { edges, dropped } = validateGraphEdges(
-    resp.newNodes ?? [],
+    newNodes,
     resp.newEdges ?? [],
     existingSummary
   )
-  return { response: { ...resp, newEdges: edges }, droppedEdges: dropped }
+  return { response: { ...resp, newNodes, newEdges: edges }, droppedEdges: dropped }
 }

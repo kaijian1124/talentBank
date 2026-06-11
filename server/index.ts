@@ -2,7 +2,11 @@
 // Boots an Express server that proxies candidate analysis to OpenAI so
 // the API key stays server-side. Run via `npm run dev:server` (tsx) or
 // alongside Vite via `npm run dev` (concurrently).
-import 'dotenv/config'
+import dotenv from 'dotenv'
+// Load .env.local first (matches Vite's convention), then .env as fallback.
+// Plain `dotenv/config` only reads .env, so we configure paths explicitly.
+dotenv.config({ path: '.env.local' })
+dotenv.config()
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import { candidateRouter } from './routes/candidate'

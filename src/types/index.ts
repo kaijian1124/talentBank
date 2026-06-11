@@ -242,6 +242,11 @@ export interface UserSession {
   verificationQueue: string[]
   createdAt: number
   updatedAt: number
+  // Candidate capability graph backbone (Step 1 wiring).
+  capabilityGraph: CandidateCapabilityGraph | null
+  candidateDomain: CandidateDomain | null
+  targetDirection: string | null
+  readyToBuild: boolean
 }
 
 export type IntakeProgress = {

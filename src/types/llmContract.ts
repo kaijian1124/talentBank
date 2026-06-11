@@ -12,6 +12,7 @@ import type {
   CapabilityNode,
   CapabilityNodeType,
   CapabilityEdgeType,
+  EvidenceLevel,
   MeaningfulExperience,
   MeaningfulExperienceKind,
   ChatMessage,
@@ -47,6 +48,15 @@ export const CAPABILITY_EDGE_TYPES: CapabilityEdgeType[] = [
   'performed_in',
   'indicates',
   'needs_evidence',
+]
+
+export const EVIDENCE_LEVELS: EvidenceLevel[] = [
+  'self_claimed',
+  'conversation_supported',
+  'conversation_verified',
+  'project_supported',
+  'artifact_supported',
+  'externally_validated',
 ]
 
 export const MEANINGFUL_EXPERIENCE_KINDS: MeaningfulExperienceKind[] = [
@@ -144,7 +154,7 @@ const capabilityClaimSchema = {
     domain: { type: 'string', enum: CANDIDATE_DOMAINS },
     rawText: { type: 'string' },
     confidence: { type: 'number' },
-    evidenceLevel: { type: 'string' },
+    evidenceLevel: { type: 'string', enum: EVIDENCE_LEVELS },
     sourceMessageIds: { type: 'array', items: { type: 'string' } },
   },
   required: [
@@ -192,7 +202,7 @@ const capabilityNodeSchema = {
     label: { type: 'string' },
     domain: { type: ['string', 'null'], enum: [...CANDIDATE_DOMAINS, null] },
     confidence: { type: 'number' },
-    evidenceLevel: { type: ['string', 'null'] },
+    evidenceLevel: { type: ['string', 'null'], enum: [...EVIDENCE_LEVELS, null] },
     description: { type: ['string', 'null'] },
   },
   required: ['id', 'type', 'label', 'domain', 'confidence', 'evidenceLevel', 'description'],

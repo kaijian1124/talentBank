@@ -1,7 +1,6 @@
 // ─── Frontend client for the candidate capability endpoints ─────────
 // Same-origin calls (Vite proxies /api → local server). The OpenAI key
-// is never exposed here. NOT wired into ChatPage yet — available for the
-// next UX step.
+// is never exposed here. Wired into ChatPage (candidate flow) + GraphPage.
 
 import { v4 as uuidv4 } from 'uuid'
 import type {
