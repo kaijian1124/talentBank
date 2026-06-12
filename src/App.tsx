@@ -1,20 +1,55 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useSessionStore } from './store/sessionStore'
+import type { AccountUser, CandidateCapabilityGraph, CompanyProfile, UserType } from './types'
+import { getAccountUser, markIntakeCompleted, updateProfileRole } from './services/accountService'
+import { createJobFromCompanyProfile } from './services/jobService'
+import { isSupabaseConfigured, supabase } from './services/supabaseClient'
+import AuthPage from './pages/AuthPage'
+import CandidateDashboard from './pages/CandidateDashboard'
+import CompanyDashboard from './pages/CompanyDashboard'
 import LandingPage from './pages/LandingPage'
 import ChatPage from './pages/ChatPage'
 import GraphPage from './pages/GraphPage'
 import MatchPage from './pages/MatchPage'
 import UniversityPage from './pages/UniversityPage'
 
-type Page = 'landing' | 'chat' | 'graph' | 'match' | 'university'
+type Page = 'auth' | 'dashboard' | 'landing' | 'chat' | 'graph' | 'match' | 'university'
 
 function App() {
-  const { session, progress } = useSessionStore()
+  const { session, progress, initSession } = useSessionStore()
+  const [accountUser, setAccountUser] = useState<AccountUser | null>(null)
+  const [authLoading, setAuthLoading] = useState(isSupabaseConfigured)
   const [forcePage, setForcePage] = useState<Page | null>(null)
 
   useEffect(() => {
-    document.title = 'Talentbank — AI Talent Graph'
+    document.title = 'Talentbank Career OS'
   }, [])
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      setAuthLoading(false)
+      return
+    }
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      const user = await getAccountUser(data.session?.user ?? null)
+      setAccountUser(user)
+      if (user && (!user.role || !user.intakeCompleted)) initSession()
+      setAuthLoading(false)
+    })
+
+    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, sessionData) => {
+      const user = await getAccountUser(sessionData?.user ?? null)
+      setAccountUser(user)
+      setForcePage(null)
+      useSessionStore.getState().resetSession()
+      if (user && (!user.role || !user.intakeCompleted)) {
+        useSessionStore.getState().initSession()
+      }
+    })
+
+    return () => listener.subscription.unsubscribe()
+  }, [initSession])
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -25,9 +60,19 @@ function App() {
     return () => window.removeEventListener('goto', handler)
   }, [])
 
+  useEffect(() => {
+    if (accountUser && !accountUser.role && !session) {
+      initSession()
+      setForcePage(null)
+    }
+  }, [accountUser, initSession, session])
+
   const getPage = (): Page => {
+    if (!accountUser) return forcePage === 'university' ? 'university' : 'auth'
+    if (!accountUser.role) return 'chat'
     if (forcePage) return forcePage
-    if (!session) return 'landing'
+    if (!accountUser.intakeCompleted) return session ? 'chat' : 'dashboard'
+    if (!session) return 'dashboard'
     if (progress.matchReady) return 'match'
     if (progress.graphGenerated) return 'graph'
     return 'chat'
@@ -35,9 +80,85 @@ function App() {
 
   const page = getPage()
 
+  const handleDemoLogin = () => {
+    setAccountUser({
+      id: 'demo_candidate',
+      email: 'candidate@example.com',
+      displayName: 'Candidate',
+      role: null,
+      intakeCompleted: false,
+    })
+    initSession()
+    setForcePage(null)
+  }
+
+  const handleLogout = async () => {
+    if (isSupabaseConfigured && supabase) {
+      await supabase.auth.signOut()
+    }
+    useSessionStore.getState().resetSession()
+    setAccountUser(null)
+    setForcePage(null)
+  }
+
+  const handleStartIntake = () => {
+    initSession()
+    setForcePage(null)
+  }
+
+  const handleSkipIntake = async () => {
+    if (!accountUser) return
+    if (!accountUser.role) {
+      initSession()
+      setForcePage(null)
+      return
+    }
+    const updated = isSupabaseConfigured
+      ? await markIntakeCompleted(accountUser.id)
+      : { ...accountUser, intakeCompleted: true }
+    if (updated) setAccountUser(updated)
+    useSessionStore.getState().resetSession()
+    setForcePage('dashboard')
+  }
+
+  const handleRoleSelected = async (role: Exclude<UserType, 'unknown'>) => {
+    if (!accountUser) return
+    const updated = isSupabaseConfigured
+      ? await updateProfileRole(accountUser.id, role)
+      : { ...accountUser, role }
+    if (updated) setAccountUser(updated)
+  }
+
+  const handleIntakeCompleted = async (graph?: CandidateCapabilityGraph) => {
+    if (!accountUser) return
+    const candidateGraph = graph ?? useSessionStore.getState().session?.capabilityGraph ?? null
+    const updated = isSupabaseConfigured
+      ? await markIntakeCompleted(accountUser.id, candidateGraph)
+      : { ...accountUser, intakeCompleted: true, candidateGraph: candidateGraph }
+    if (updated) setAccountUser(updated)
+  }
+
+  const handleCompanyIntakeCompleted = async (profile: CompanyProfile) => {
+    if (!accountUser) return
+    await createJobFromCompanyProfile(accountUser.id, profile)
+    const updated = isSupabaseConfigured
+      ? await markIntakeCompleted(accountUser.id, null, profile)
+      : { ...accountUser, intakeCompleted: true, companyProfile: profile }
+    if (updated) setAccountUser(updated)
+    useSessionStore.getState().resetSession()
+    setForcePage('dashboard')
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-950 text-gray-400 flex items-center justify-center">
+        Loading Career OS...
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
-      {/* Nav */}
       <nav className="border-b border-gray-800 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg bg-violet-600 flex items-center justify-center text-white font-bold text-sm">T</div>
@@ -45,9 +166,17 @@ function App() {
           <span className="text-gray-500 text-xs ml-1">Career OS</span>
         </div>
         <div className="flex items-center gap-4 text-sm">
+          {accountUser?.role && (
+            <button
+              onClick={() => { useSessionStore.getState().resetSession(); setForcePage('dashboard') }}
+              className="text-gray-400 hover:text-white transition-colors"
+            >
+              Dashboard
+            </button>
+          )}
           {session && (
             <button
-              onClick={() => { useSessionStore.getState().resetSession(); setForcePage(null) }}
+              onClick={() => { useSessionStore.getState().resetSession(); initSession(); setForcePage(null) }}
               className="text-gray-400 hover:text-white transition-colors"
             >
               New Session
@@ -57,15 +186,44 @@ function App() {
             onClick={() => setForcePage(forcePage === 'university' ? null : 'university')}
             className="text-gray-400 hover:text-white transition-colors"
           >
-            {forcePage === 'university' ? '← Back' : 'University Demo'}
+            {forcePage === 'university' ? 'Back' : 'University Demo'}
           </button>
+          {accountUser && (
+            <button
+              onClick={handleLogout}
+              className="text-gray-400 hover:text-white transition-colors"
+            >
+              Logout
+            </button>
+          )}
         </div>
       </nav>
 
-      {/* Pages */}
+      {page === 'auth' && <AuthPage onDemoLogin={handleDemoLogin} />}
+      {page === 'dashboard' && accountUser?.role === 'candidate' && (
+        <CandidateDashboard
+          user={accountUser}
+          onStartIntake={handleStartIntake}
+          onLogout={handleLogout}
+        />
+      )}
+      {page === 'dashboard' && accountUser?.role === 'company' && (
+        <CompanyDashboard
+          user={accountUser}
+          onStartIntake={handleStartIntake}
+          onLogout={handleLogout}
+        />
+      )}
       {page === 'university' && <UniversityPage onBack={() => setForcePage(null)} />}
       {page === 'landing' && <LandingPage />}
-      {page === 'chat' && <ChatPage />}
+      {page === 'chat' && (
+        <ChatPage
+          onSkip={handleSkipIntake}
+          onRoleSelected={handleRoleSelected}
+          onIntakeCompleted={handleIntakeCompleted}
+          onCompanyIntakeCompleted={handleCompanyIntakeCompleted}
+        />
+      )}
       {page === 'graph' && <GraphPage />}
       {page === 'match' && <MatchPage />}
     </div>

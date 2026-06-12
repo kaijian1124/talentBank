@@ -193,8 +193,56 @@ export function extractCandidateProfile(messages: string[]): CandidateProfile {
   return profile
 }
 
-export function extractCompanyProfile(_messages: string[]): CompanyProfile {
-  return { ...demoCompanyProfile }
+export function extractCompanyProfile(messages: string[]): CompanyProfile {
+  const [
+    maybeCompanyOrRole = '',
+    problem = '',
+    mustHave = '',
+    niceToHave = '',
+    team = '',
+    workMode = '',
+    success = '',
+  ] = messages
+
+  const allText = messages.join(' ')
+  const roleTitle = inferRoleTitle(maybeCompanyOrRole, allText)
+  const companyName = inferCompanyName(allText)
+
+  return {
+    companyName,
+    roleTitle,
+    roleDescription: problem || `${roleTitle} role`,
+    painPoints: splitList(problem),
+    mustHaveSkills: splitList(mustHave),
+    niceToHaveSkills: splitList(niceToHave),
+    teamContext: splitList([team, workMode].filter(Boolean).join(', ')),
+    successCriteria: splitList(success),
+    cultureSignals: splitList(team),
+    confidence: 0.72,
+  }
+}
+
+function inferRoleTitle(firstAnswer: string, allText: string): string {
+  const roleMatch = allText.match(/(?:hiring for|hire|role is|position is|looking for)\s+([^,.]+)/i)
+  if (roleMatch?.[1]) return cleanShortText(roleMatch[1])
+  return cleanShortText(firstAnswer) || demoCompanyProfile.roleTitle
+}
+
+function inferCompanyName(allText: string): string | undefined {
+  const companyMatch = allText.match(/(?:company is|company name is|we are|from)\s+([^,.]+)/i)
+  return companyMatch?.[1] ? cleanShortText(companyMatch[1]) : undefined
+}
+
+function splitList(text: string): string[] {
+  return text
+    .split(/,|;|\n| and /i)
+    .map(cleanShortText)
+    .filter(Boolean)
+    .slice(0, 8)
+}
+
+function cleanShortText(text: string): string {
+  return text.trim().replace(/\s+/g, ' ').replace(/[.。]$/, '')
 }
 
 // ─── Confirmation summary ──────────────────────────────────────────

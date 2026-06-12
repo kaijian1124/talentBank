@@ -165,7 +165,7 @@ export interface CandidateProfile {
   preferences: Record<string, string>
   missingInfo: string[]
   confidence: number
-  // Candidate capability graph backbone (Step 1) â€” optional, additive.
+  // Candidate capability graph backbone (Step 1) ??optional, additive.
   domain?: CandidateDomain
   targetDirection?: string
   capabilityClaims?: CapabilityClaim[]
@@ -257,7 +257,7 @@ export type IntakeProgress = {
   matchReady: boolean
 }
 
-// â”€â”€â”€ Candidate Capability Graph backbone (Step 1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ?€?€?€ Candidate Capability Graph backbone (Step 1) ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
 // Cross-domain, candidate-only capability/experience model. Additive:
 // existing skill/project types above remain valid for current pages.
 
@@ -348,3 +348,80 @@ export interface CandidateCapabilityGraph {
   missingEvidence: string[]
   generatedAt: number
 }
+
+export interface AccountUser {
+  id: string
+  email: string
+  role: 'candidate' | 'company' | 'university' | null
+  displayName?: string
+  intakeCompleted: boolean
+  candidateGraph?: CandidateCapabilityGraph | null
+  companyProfile?: CompanyProfile | null
+}
+
+export interface JobPosting {
+  id: string
+  companyId: string
+  companyName: string
+  title: string
+  description: string
+  salaryMin?: number
+  salaryMax?: number
+  salaryCurrency: string
+  companyIntro?: string
+  location?: string
+  employmentType?: string
+  status: 'open' | 'closed'
+  fitScore: number
+  createdAt: string
+}
+
+export interface JobApplication {
+  id: string
+  jobId: string
+  candidateId: string
+  companyId: string
+  status: 'submitted' | 'reviewing' | 'shortlisted' | 'rejected'
+  fitScore: number
+  candidateEmail?: string
+  candidateName?: string
+  createdAt: string
+}
+
+export interface CompanyNotification {
+  id: string
+  companyId: string
+  candidateId?: string
+  jobId?: string
+  type: string
+  title: string
+  message: string
+  candidateEmail?: string
+  candidateName?: string
+  isRead: boolean
+  createdAt: string
+}
+
+export interface MessageThread {
+  id: string
+  companyId: string
+  candidateId: string
+  jobId?: string
+  jobTitle?: string
+  companyName: string
+  candidateName?: string
+  candidateEmail?: string
+  lastMessage?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ThreadMessage {
+  id: string
+  threadId: string
+  senderId: string
+  senderRole: 'candidate' | 'company'
+  body: string
+  createdAt: string
+}
+

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useSessionStore } from '../store/sessionStore'
-import { Send, Loader2, CheckCircle2, Circle, Zap, Network } from 'lucide-react'
+import { Send, Loader2, CheckCircle2, Circle, Zap, Network, SkipForward } from 'lucide-react'
 import {
   classifyUserType, getIntakeQuestion, getIntakeLength,
   extractCompanyProfile, generateChatResponse,
@@ -11,11 +11,21 @@ import { demoCompanyProfile } from '../services/mockData'
 import {
   getNextQuestion, buildCapabilityGraph, mergeGraphDelta, preserveSelfClaimedSkills, toGraphSummary,
 } from '../services/candidateAnalysis'
-import type { CandidateProfile, ChatMessage } from '../types'
+import type { CandidateProfile, ChatMessage, CompanyProfile, UserType } from '../types'
 
 const MAX_CANDIDATE_INTAKE_ANSWERS = 5
 
-export default function ChatPage() {
+export default function ChatPage({
+  onSkip,
+  onRoleSelected,
+  onIntakeCompleted,
+  onCompanyIntakeCompleted,
+}: {
+  onSkip?: () => void
+  onRoleSelected?: (role: Exclude<UserType, 'unknown'>) => void
+  onIntakeCompleted?: (graph?: ReturnType<typeof mergeGraphDelta>) => void
+  onCompanyIntakeCompleted?: (profile: CompanyProfile) => void
+}) {
   const {
     session, progress, isLoading, isVerifying, verifyingSkill,
     addMessage, setUserType, incrementStep, setLoading,
@@ -100,6 +110,7 @@ export default function ChatPage() {
       const enrichedDelta = preserveSelfClaimedSkills(delta, s.messages)
       const merged = mergeGraphDelta(s.capabilityGraph, enrichedDelta)
       setCapabilityGraph(merged)
+      await onIntakeCompleted?.(merged)
       addMessage('assistant', `✅ Capability graph updated — **${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening your graph...`)
       window.dispatchEvent(new CustomEvent('goto', { detail: 'graph' }))
     } catch (e) {
@@ -127,6 +138,7 @@ export default function ChatPage() {
           return
         }
         setUserType(detected)
+        onRoleSelected?.(detected)
 
         if (detected === 'candidate') {
           addMessage('assistant', "Got it — I'll set you up as a **Candidate**. I'll ask adaptive questions to turn your real experiences into evidence of capability.")
@@ -189,8 +201,17 @@ export default function ChatPage() {
       // Auto-extract profile near end of intake
       if (newStep >= total - 1) {
         const msgs = session.messages.filter(m => m.role === 'user').map(m => m.content)
-        const profile = extractCompanyProfile([...msgs, text])
-        setProfile(profile)
+        if (session.userType === 'company') {
+          const profile = extractCompanyProfile([...msgs, text])
+          setProfile(profile)
+          addMessage('assistant', 'Thanks. I have enough to create your company dashboard and first job posting.')
+          await onCompanyIntakeCompleted?.(profile)
+          setLoading(false)
+          return
+        } else {
+          const profile = extractCompanyProfile([...msgs, text])
+          setProfile(profile)
+        }
       }
     } finally {
       setLoading(false)
@@ -210,6 +231,15 @@ export default function ChatPage() {
     <div className="flex h-[calc(100vh-57px)]">
       {/* Sidebar */}
       <div className="w-64 border-r border-gray-800 p-4 flex-col gap-4 hidden md:flex">
+        {onSkip && (
+          <button
+            onClick={onSkip}
+            className="border border-gray-700 hover:border-violet-600 text-gray-300 hover:text-white text-sm font-semibold px-3 py-2 rounded-lg transition-colors flex items-center justify-center gap-2"
+          >
+            <SkipForward size={14} />
+            Skip for now
+          </button>
+        )}
         <div>
           <p className="text-xs text-gray-500 uppercase tracking-widest mb-3">Progress</p>
           <div className="flex flex-col gap-2">
