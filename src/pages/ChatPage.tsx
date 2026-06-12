@@ -9,9 +9,11 @@ import { buildTalentGraph } from '../services/graphService'
 import { matchCandidateToCompany } from '../services/matchingService'
 import { demoCompanyProfile } from '../services/mockData'
 import {
-  getNextQuestion, buildCapabilityGraph, mergeGraphDelta, toGraphSummary,
+  getNextQuestion, buildCapabilityGraph, mergeGraphDelta, preserveSelfClaimedSkills, toGraphSummary,
 } from '../services/candidateAnalysis'
 import type { CandidateProfile, ChatMessage } from '../types'
+
+const MAX_CANDIDATE_INTAKE_ANSWERS = 5
 
 export default function ChatPage() {
   const {
@@ -50,15 +52,32 @@ export default function ChatPage() {
         domain: s.candidateDomain ?? undefined,
         targetDirection: s.targetDirection ?? null,
       })
-      addMessage('assistant', res.nextQuestion)
+      const answerCount = countCandidateAnswers(priorMessages, text)
+      const questionBudgetReached = answerCount >= MAX_CANDIDATE_INTAKE_ANSWERS
+      const shouldOfferBuild = (res.readyToBuild || questionBudgetReached) && !s.capabilityGraph
+      addMessage(
+        'assistant',
+        questionBudgetReached && !s.capabilityGraph
+          ? [
+              'We have enough for a first-pass capability graph within the 30-minute intake.',
+              '',
+              'Click **Build Capability Graph** in the sidebar now. After that, you can refine it by adding more skills, projects, or evidence.',
+            ].join('\n')
+          : shouldOfferBuild
+          ? [
+              'I have enough to draft an initial capability graph.',
+              '',
+              `You can answer one more question to make it stronger: ${res.nextQuestion}`,
+              '',
+              'Or click **Build Capability Graph** in the sidebar now and refine it later.',
+            ].join('\n')
+          : res.nextQuestion
+      )
       setCandidateMeta({
         domain: res.detectedDomain,
         targetDirection: res.targetDirection,
-        readyToBuild: res.readyToBuild,
+        readyToBuild: res.readyToBuild || questionBudgetReached,
       })
-      if (res.readyToBuild && !s.capabilityGraph) {
-        addMessage('assistant', "I have enough to draft your capability graph. Click **Build Capability Graph** in the sidebar whenever you're ready — or keep telling me more.")
-      }
     } catch (e) {
       addMessage('assistant', `⚠️ I couldn't reach the analysis service. ${(e as Error).message}\n\nMake sure the API server is running (\`npm run dev\`) and your key is set in \`.env.local\`.`)
     }
@@ -78,7 +97,8 @@ export default function ChatPage() {
         domain: s.candidateDomain ?? undefined,
         targetDirection: s.targetDirection ?? null,
       })
-      const merged = mergeGraphDelta(s.capabilityGraph, delta)
+      const enrichedDelta = preserveSelfClaimedSkills(delta, s.messages)
+      const merged = mergeGraphDelta(s.capabilityGraph, enrichedDelta)
       setCapabilityGraph(merged)
       addMessage('assistant', `✅ Capability graph updated — **${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening your graph...`)
       window.dispatchEvent(new CustomEvent('goto', { detail: 'graph' }))
@@ -363,4 +383,9 @@ function capitalise(s: string) {
 
 function delay(ms: number) {
   return new Promise(res => setTimeout(res, ms))
+}
+
+function countCandidateAnswers(priorMessages: ChatMessage[], latestUserMessage: string) {
+  const priorUserMessages = priorMessages.filter(m => m.role === 'user' && m.content.trim().length > 0)
+  return priorUserMessages.length + (latestUserMessage.trim() ? 1 : 0)
 }
