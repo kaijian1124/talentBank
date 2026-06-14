@@ -17,6 +17,7 @@ interface SessionStore {
 
   // actions
   initSession: () => void
+  restoreSession: (session: UserSession) => void
   setUserType: (type: UserType) => void
   addMessage: (role: 'user' | 'assistant', content: string) => void
   setProfile: (profile: CandidateProfile | CompanyProfile) => void
@@ -71,6 +72,15 @@ function makeSession(): UserSession {
   }
 }
 
+function progressFromSession(session: UserSession): IntakeProgress {
+  return {
+    roleDetected: session.userType !== 'unknown',
+    profileExtracted: Boolean(session.structuredProfile || session.candidateDomain || session.targetDirection),
+    claimsVerified: session.structuredAnswers.length > 0 || Boolean(session.capabilityGraph),
+    graphGenerated: Boolean(session.graph || session.capabilityGraph),
+    matchReady: Boolean(session.matchResult),
+  }
+}
 export const useSessionStore = create<SessionStore>((set, get) => ({
   session: null,
   progress: { ...defaultProgress },
@@ -81,6 +91,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   initSession: () => set({
     session: makeSession(),
     progress: { ...defaultProgress },
+    isLoading: false,
+    isVerifying: false,
+    verifyingSkill: null,
+  }),
+  restoreSession: (restoredSession) => set({
+    session: restoredSession,
+    progress: progressFromSession(restoredSession),
     isLoading: false,
     isVerifying: false,
     verifyingSkill: null,

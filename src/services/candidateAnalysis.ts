@@ -1,5 +1,5 @@
-// ─── Frontend client for the candidate capability endpoints ─────────
-// Same-origin calls (Vite proxies /api → local server). The OpenAI key
+// ??? Frontend client for the candidate capability endpoints ?????????
+// Same-origin calls (Vite proxies /api ??local server). The OpenAI key
 // is never exposed here. Wired into ChatPage (candidate flow) + GraphPage.
 
 import { v4 as uuidv4 } from 'uuid'
@@ -19,7 +19,21 @@ import type {
 
 const API_BASE = '/api/candidate'
 
-// ─── Hot path: next question (consumes SSE stream) ──────────────────
+const SOFT_SKILL_LABELS = new Set([
+  'communication',
+  'teamwork',
+  'problem solving',
+  'time management',
+  'adaptability',
+  'critical thinking',
+  'self learning',
+  'self-learning',
+  'attention to detail',
+  'leadership',
+  'persistence',
+])
+
+// ??? Hot path: next question (consumes SSE stream) ??????????????????
 // onToken (optional) receives incremental raw JSON text deltas for
 // progress UIs. The resolved value is the fully parsed response.
 export async function getNextQuestion(
@@ -74,7 +88,7 @@ export async function getNextQuestion(
   return result
 }
 
-// ─── Cold path: build graph deltas ──────────────────────────────────
+// ??? Cold path: build graph deltas ??????????????????????????????????
 export async function buildCapabilityGraph(
   input: CandidateTurnRequest
 ): Promise<GraphBuildResponse> {
@@ -129,7 +143,7 @@ export function preserveSelfClaimedSkills(
   })
 }
 
-// ─── Pure helper: merge a build delta into an existing graph ────────
+// ??? Pure helper: merge a build delta into an existing graph ????????
 export function mergeGraphDelta(
   graph: CandidateCapabilityGraph | null,
   delta: GraphBuildResponse
@@ -155,7 +169,7 @@ export function mergeGraphDelta(
       : canonicalIdByMeaning.get(nodeMeaningKey(incoming))
     const id = existingId ?? incoming.id
     const current = nodeById.get(id)
-    const cappedIncoming = applyConfidencePolicy({ ...incoming, id })
+    const cappedIncoming = applyConfidencePolicy(normaliseNodeType({ ...incoming, id }))
     const merged = current ? mergeNode(current, cappedIncoming) : cappedIncoming
     nodeById.set(id, merged)
     canonicalIdByMeaning.set(nodeMeaningKey(merged), id)
@@ -185,13 +199,13 @@ export function mergeGraphDelta(
   }
 }
 
-// ─── Pure helper: compact summary to pass back into prompts ─────────
+// ??? Pure helper: compact summary to pass back into prompts ?????????
 export function toGraphSummary(graph: CandidateCapabilityGraph | null): GraphSummaryItem[] {
   if (!graph) return []
   return graph.nodes.map((n) => ({ id: n.id, label: n.label, type: n.type }))
 }
 
-// ─── internals ──────────────────────────────────────────────────────
+// ??? internals ??????????????????????????????????????????????????????
 function parseSseFrame(frame: string): { event?: string; data?: string } {
   let event: string | undefined
   const dataLines: string[] = []
@@ -264,6 +278,16 @@ function strongerEvidence(
     'externally_validated',
   ]
   return rank.indexOf(incoming) > rank.indexOf(current) ? incoming : current
+}
+
+function normaliseNodeType(node: CapabilityNode): CapabilityNode {
+  return node.type === 'capability' && isSoftSkillLabel(node.label)
+    ? { ...node, type: 'trait' }
+    : node
+}
+
+function isSoftSkillLabel(label: string): boolean {
+  return SOFT_SKILL_LABELS.has(label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim())
 }
 
 function nodeMeaningKey(node: CapabilityNode): string {

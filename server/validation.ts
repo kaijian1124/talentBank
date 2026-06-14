@@ -8,6 +8,30 @@ import type {
 } from '../src/types/llmContract'
 import type { CapabilityEdge, CapabilityNode } from '../src/types'
 
+const SOFT_SKILL_LABELS = new Set([
+  'communication',
+  'teamwork',
+  'problem solving',
+  'time management',
+  'adaptability',
+  'critical thinking',
+  'self learning',
+  'self-learning',
+  'attention to detail',
+  'leadership',
+  'persistence',
+])
+
+function isSoftSkillLabel(label: string): boolean {
+  return SOFT_SKILL_LABELS.has(label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim())
+}
+
+function normaliseNodeType(node: CapabilityNode): CapabilityNode {
+  return node.type === 'capability' && isSoftSkillLabel(node.label)
+    ? { ...node, type: 'trait' }
+    : node
+}
+
 export interface ValidationResult<T> {
   ok: boolean
   value?: T
@@ -90,7 +114,7 @@ export function validateGraphEdges(
 // reference their ids from being dropped during validation.
 export function synthesizeNodesFromClaims(resp: GraphBuildResponse): CapabilityNode[] {
   const byId = new Map<string, CapabilityNode>()
-  for (const n of resp.newNodes ?? []) byId.set(n.id, n)
+  for (const n of resp.newNodes ?? []) byId.set(n.id, normaliseNodeType(n))
 
   for (const c of resp.newCapabilities ?? []) {
     if (!byId.has(c.id)) {

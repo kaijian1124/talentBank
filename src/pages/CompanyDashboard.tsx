@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { Bell, Briefcase, Loader2, LogOut, Mail, MessageCircle, PlusCircle, Send, X } from 'lucide-react'
 import type { AccountUser, CompanyNotification, JobPosting, MessageThread, ThreadMessage } from '../types'
 import { closeJobPosting, createJobPosting, getCompanyJobs, getCompanyNotifications } from '../services/jobService'
@@ -365,7 +365,7 @@ function JobPostingModal({
   onClose: () => void
   onCreated: (job: JobPosting) => void
 }) {
-  const [companyName, setCompanyName] = useState(user.companyProfile?.companyName ?? user.displayName ?? '')
+  const companyName = user.companyProfile?.companyName ?? user.displayName ?? 'Company'
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [salaryMin, setSalaryMin] = useState('')
@@ -379,15 +379,15 @@ function JobPostingModal({
 
   const handleSubmit = async () => {
     setError('')
-    if (!companyName.trim() || !title.trim() || !description.trim()) {
-      setError('Company name, position, and job description are required.')
+    if (!title.trim() || !description.trim()) {
+      setError('Position and job description are required.')
       return
     }
     setIsSubmitting(true)
     try {
       const job = await createJobPosting({
         companyId: user.id,
-        companyName: companyName.trim(),
+        companyName,
         title: title.trim(),
         description: description.trim(),
         salaryMin: salaryMin ? Number(salaryMin) : undefined,
@@ -419,8 +419,10 @@ function JobPostingModal({
         </div>
 
         <div className="p-5 grid grid-cols-1 gap-4">
-          <Field label="Company name" value={companyName} onChange={setCompanyName} placeholder="e.g. KJ Tech" />
-          <Field label="Position" value={title} onChange={setTitle} placeholder="e.g. Junior Backend Engineer" />
+          <div className="rounded-lg border border-gray-800 bg-gray-950 px-3 py-2">
+            <p className="text-xs text-gray-500 mb-1">Company</p>
+            <p className="text-sm text-white font-medium">{companyName}</p>
+          </div>          <Field label="Position" value={title} onChange={setTitle} placeholder="e.g. Junior Backend Engineer" />
           <TextArea label="Job description" value={description} onChange={setDescription} placeholder="Responsibilities, requirements, and what the candidate will work on." />
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

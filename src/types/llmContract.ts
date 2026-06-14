@@ -1,7 +1,7 @@
-// ─── LLM structured-output contracts (Step 1 backbone) ──────────────
+﻿// ??? LLM structured-output contracts (Step 1 backbone) ??????????????
 // Two wire contracts, one per endpoint:
-//   - NextQuestionResponse  → POST /api/candidate/next-question (hot path)
-//   - GraphBuildResponse    → POST /api/candidate/build-graph   (cold path)
+//   - NextQuestionResponse  ??POST /api/candidate/next-question (hot path)
+//   - GraphBuildResponse    ??POST /api/candidate/build-graph   (cold path)
 // Each ships with a JSON Schema constant for OpenAI Structured Outputs,
 // exported so the client and server agree on the exact shape.
 
@@ -18,7 +18,7 @@ import type {
   ChatMessage,
 } from './index'
 
-// ─── Shared enum value lists (single source of truth for schemas) ──
+// ??? Shared enum value lists (single source of truth for schemas) ??
 export const CANDIDATE_DOMAINS: CandidateDomain[] = [
   'technology',
   'engineering',
@@ -88,7 +88,7 @@ export const MEANINGFUL_EXPERIENCE_KINDS: MeaningfulExperienceKind[] = [
   'other',
 ]
 
-// ─── Phased intake vocabulary ──────────────────────────────────────
+// ??? Phased intake vocabulary ??????????????????????????????????????
 export type IntakePhase = 'anchor' | 'breadth' | 'depth' | 'ready'
 export type QuestionFormat = 'single_select' | 'multi_select' | 'open'
 export type OptionRequestKind = 'none' | 'domain' | 'role' | 'skills_for_role'
@@ -129,7 +129,7 @@ export interface StructuredAnswer {
   manualEntries: string[]
 }
 
-// ─── Shared request shapes ─────────────────────────────────────────
+// ??? Shared request shapes ?????????????????????????????????????????
 // Compact summary of the existing graph passed into prompts instead of
 // full node objects, to keep input tokens low.
 export interface GraphSummaryItem {
@@ -148,7 +148,7 @@ export interface CandidateTurnRequest {
   targetDirection?: string | null
 }
 
-// ─── Hot path: next-question response ──────────────────────────────
+// ??? Hot path: next-question response ??????????????????????????????
 export interface NextQuestionLLMOutput {
   phase: IntakePhase
   questionFormat: QuestionFormat
@@ -171,7 +171,7 @@ export interface NextQuestionResponse {
   coverageNote?: string
 }
 
-// ─── Cold path: graph build (delta-first) response ─────────────────
+// ??? Cold path: graph build (delta-first) response ?????????????????
 export interface GraphBuildResponse {
   domain: CandidateDomain
   targetDirection: string | null
@@ -190,7 +190,7 @@ export interface CandidateInterviewAnalysis
   extends NextQuestionResponse,
     Omit<GraphBuildResponse, 'domain' | 'targetDirection'> {}
 
-// ─── JSON Schemas for OpenAI Structured Outputs ────────────────────
+// ??? JSON Schemas for OpenAI Structured Outputs ????????????????????
 // Note: OpenAI strict structured outputs require `additionalProperties:false`
 // and every property listed in `required`. Optional fields are modelled as
 // nullable instead of omitted.
@@ -342,5 +342,54 @@ export const GRAPH_BUILD_JSON_SCHEMA = {
       'confidence',
       'interviewSummary',
     ],
+  },
+} as const
+
+// Company hiring intake -> job_postings draft
+export interface CompanyJobPostingRequest {
+  messages: ChatMessage[]
+  fallbackCompanyName?: string
+}
+
+export interface CompanyJobPostingResponse {
+  companyName: string
+  title: string
+  description: string
+  salaryMin: number | null
+  salaryMax: number | null
+  salaryCurrency: string
+  companyIntro: string | null
+  location: string | null
+  employmentType: string | null
+}
+
+export const COMPANY_JOB_POSTING_JSON_SCHEMA = {
+  name: 'company_job_posting',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'companyName',
+      'title',
+      'description',
+      'salaryMin',
+      'salaryMax',
+      'salaryCurrency',
+      'companyIntro',
+      'location',
+      'employmentType',
+    ],
+    properties: {
+      companyName: { type: 'string', minLength: 1 },
+      title: { type: 'string', minLength: 1 },
+      description: { type: 'string', minLength: 1 },
+      salaryMin: { type: ['number', 'null'] },
+      salaryMax: { type: ['number', 'null'] },
+      salaryCurrency: { type: 'string', minLength: 1 },
+      companyIntro: { type: ['string', 'null'] },
+      location: { type: ['string', 'null'] },
+      employmentType: { type: ['string', 'null'] },
+    },
   },
 } as const

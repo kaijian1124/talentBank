@@ -1,17 +1,18 @@
-import { useState, useRef, useEffect } from 'react'
+﻿import { useState, useRef, useEffect } from 'react'
 import { useSessionStore } from '../store/sessionStore'
 import { Send, Loader2, CheckCircle2, Circle, Zap, Network, SkipForward, Check, ListChecks } from 'lucide-react'
 import {
   classifyUserType, getIntakeQuestion, getIntakeLength,
-  extractCompanyProfile, generateChatResponse,
+  extractCompanyJobPosting, extractCompanyProfile, generateChatResponse,
 } from '../services/mockLlm'
 import { buildTalentGraph } from '../services/graphService'
 import { matchCandidateToCompany } from '../services/matchingService'
 import { demoCompanyProfile } from '../services/mockData'
+import { generateCompanyJobPosting } from '../services/companyAnalysis'
 import {
   getNextQuestion, buildCapabilityGraph, mergeGraphDelta, preserveSelfClaimedSkills, toGraphSummary,
 } from '../services/candidateAnalysis'
-import type { CandidateProfile, ChatMessage, CompanyProfile, UserType } from '../types'
+import type { CandidateProfile, ChatMessage, CompanyProfile, JobPosting, UserType } from '../types'
 import type { StructuredAnswer, StructuredQuestion } from '../types/llmContract'
 
 const MAX_CANDIDATE_INTAKE_ANSWERS = 5
@@ -21,16 +22,21 @@ export default function ChatPage({
   onRoleSelected,
   onIntakeCompleted,
   onCompanyIntakeCompleted,
+  companyName,
 }: {
   onSkip?: () => void
-  onRoleSelected?: (role: Exclude<UserType, 'unknown'>) => void
+  onRoleSelected?: (role: Exclude<UserType, 'unknown'>) => void | Promise<void>
+  companyName?: string
   onIntakeCompleted?: (graph?: ReturnType<typeof mergeGraphDelta>) => void
-  onCompanyIntakeCompleted?: (profile: CompanyProfile) => void
+  onCompanyIntakeCompleted?: (
+    jobDraft: Omit<JobPosting, 'id' | 'companyId' | 'fitScore' | 'status' | 'createdAt'>,
+    profile: CompanyProfile
+  ) => void
 }) {
   const {
     session, progress, isLoading, isVerifying, verifyingSkill,
     addMessage, setUserType, incrementStep, setLoading,
-    setProfile, setGraph, setMatchResult,
+    setProfile, setMatchResult,
     setCapabilityGraph, setCandidateMeta,
     addStructuredAnswer, clearPendingQuestion,
   } = useSessionStore()
@@ -42,7 +48,7 @@ export default function ChatPage({
   useEffect(() => {
     if (!hasInitialized.current && session && session.messages.length === 0) {
         hasInitialized.current = true
-        addMessage('assistant', "Welcome to Talentbank 👋\n\nAre you here as a **Candidate**, **Company**, or **University**?\n\nFeel free to describe yourself naturally — I'll figure it out.")
+        addMessage('assistant', "Welcome to Talentbank ??\n\nAre you here as a **Candidate**, **Company**, or **University**?\n\nFeel free to describe yourself naturally ??I'll figure it out.")
     }
   }, [session, addMessage])
 
@@ -52,7 +58,7 @@ export default function ChatPage({
 
   if (!session) return null
 
-  // ─── Candidate path (real LLM via local API) ──────────────────────
+  // ??? Candidate path (real LLM via local API) ??????????????????????
   const handleCandidateTurn = async (text: string, priorMessages: ChatMessage[]) => {
     const s = useSessionStore.getState().session
     if (!s) return
@@ -97,7 +103,7 @@ export default function ChatPage({
         pendingQuestion: res.structuredQuestion,
       })
     } catch (e) {
-      addMessage('assistant', `⚠️ I couldn't reach the analysis service. ${(e as Error).message}\n\nMake sure the API server is running (\`npm run dev\`) and your key is set in \`.env.local\`.`)
+      addMessage('assistant', `?? I couldn't reach the analysis service. ${(e as Error).message}\n\nMake sure the API server is running (\`npm run dev\`) and your key is set in \`.env.local\`.`)
     }
   }
 
@@ -117,10 +123,18 @@ export default function ChatPage({
       selectedLabels,
       manualEntries,
     }
+    const selectedRole = resolveRoleSelection(q, answer)
     const priorMessages = s.messages
     const summaryText = picks.join(', ')
     addStructuredAnswer(answer)
     clearPendingQuestion()
+    if (selectedRole) {
+      setCandidateMeta({
+        targetDirection: selectedRole,
+        phase: 'anchor',
+        pendingQuestion: null,
+      })
+    }
     addMessage('user', summaryText)
     setLoading(true)
     try {
@@ -150,10 +164,10 @@ export default function ChatPage({
       const merged = mergeGraphDelta(s.capabilityGraph, enrichedDelta)
       setCapabilityGraph(merged)
       await onIntakeCompleted?.(merged)
-      addMessage('assistant', `✅ Capability graph updated — **${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening your graph...`)
+      addMessage('assistant', `??Capability graph updated ??**${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening your graph...`)
       window.dispatchEvent(new CustomEvent('goto', { detail: 'graph' }))
     } catch (e) {
-      addMessage('assistant', `⚠️ Build failed. ${(e as Error).message}`)
+      addMessage('assistant', `?? Build failed. ${(e as Error).message}`)
     } finally {
       setLoading(false)
     }
@@ -178,18 +192,20 @@ export default function ChatPage({
           return
         }
         setUserType(detected)
-        onRoleSelected?.(detected)
+        await onRoleSelected?.(detected)
 
         if (detected === 'candidate') {
-          addMessage('assistant', "Got it — I'll set you up as a **Candidate**. I'll ask adaptive questions to turn your real experiences into evidence of capability.")
+          addMessage('assistant', "Got it ??I'll set you up as a **Candidate**. I'll ask adaptive questions to turn your real experiences into evidence of capability.")
           await handleCandidateTurn(text, priorMessages)
           setLoading(false)
           return
         }
 
-        // Company / University use the existing demo intake flow.
         const firstQ = getIntakeQuestion(detected, 0)
-        addMessage('assistant', `Got it — I'll set you up as a **${capitalise(detected)}**.\n\n*(1/${getIntakeLength(detected)})* ${firstQ}`)
+        const intro = detected === 'company'
+          ? `Got it. I will use **${companyName || 'your account company name'}** as the company name and help you create a job post with AI.`
+          : `Got it. I'll set you up as a **${capitalise(detected)}**.`
+        addMessage('assistant', `${intro}\n\n${firstQ}`)
         setLoading(false)
         return
       }
@@ -201,58 +217,58 @@ export default function ChatPage({
         return
       }
 
-      // ===== Company / University demo flow (mock) =====
-      await delay(600)
+      // ===== Company / University intake flow =====
+      await delay(400)
 
-      const lower = text.toLowerCase()
-
-      // Generate graph trigger
-      if (lower.match(/generate graph|build graph|ready|show graph|yes.*graph/)) {
-        const msgs = session.messages.filter(m => m.role === 'user').map(m => m.content)
-        const profile = extractCompanyProfile(msgs)
-        setProfile(profile)
-        const graph = buildTalentGraph(profile as unknown as CandidateProfile, session.id)
-        setGraph(graph)
-        addMessage('assistant', "Your context has been captured. Graph generated!")
-        setLoading(false)
-        return
-      }
-
-      // Match trigger
-      if (lower.match(/match|compare|fit score|yes.*match|run match/)) {
-        const profile = session.structuredProfile as unknown as CandidateProfile
-        const graph = session.graph ?? buildTalentGraph(profile, session.id)
-        if (!session.graph) setGraph(graph)
-
-        const result = matchCandidateToCompany(graph, demoCompanyProfile)
-        setMatchResult(result)
-        addMessage('assistant', `Match complete! Fit score is **${result.fitScore}/100** (${result.fitLevel.replace('_', ' ')}). Navigating to your match result...`)
-        setLoading(false)
-        return
-      }
-
-      // Normal intake flow
       const total = getIntakeLength(session.userType)
+      const answeredCount = session.intakeStep + 1
       incrementStep()
-      const newStep = session.intakeStep + 1
-      const response = generateChatResponse(session.userType, newStep, text, false)
-      addMessage('assistant', response)
 
-      // Auto-extract profile near end of intake
-      if (newStep >= total - 1) {
-        const msgs = session.messages.filter(m => m.role === 'user').map(m => m.content)
-        if (session.userType === 'company') {
-          const profile = extractCompanyProfile([...msgs, text])
+      if (session.userType === 'company') {
+        const rawCompanyMessages = [...session.messages.filter(m => m.role === 'user').map(m => m.content), text]
+        const msgs = rawCompanyMessages.length > total ? rawCompanyMessages.slice(-total) : rawCompanyMessages
+        if (answeredCount >= total) {
+          const extractedProfile = extractCompanyProfile(msgs)
+          const profile = { ...extractedProfile, companyName: companyName || extractedProfile.companyName }
+          let jobDraft: Omit<JobPosting, 'id' | 'companyId' | 'fitScore' | 'status' | 'createdAt'>
+          try {
+            const companyMessages: ChatMessage[] = msgs.map((content, index) => ({
+              id: `company_answer_${index}`,
+              role: 'user',
+              content,
+              timestamp: Date.now() + index,
+            }))
+            jobDraft = await generateCompanyJobPosting(companyMessages, companyName || profile.companyName)
+          } catch {
+            jobDraft = extractCompanyJobPosting(msgs, companyName || profile.companyName)
+          }
           setProfile(profile)
-          addMessage('assistant', 'Thanks. I have enough to create your company dashboard and first job posting.')
-          await onCompanyIntakeCompleted?.(profile)
+          addMessage(
+            'assistant',
+            [
+              'Thanks. I have enough to create a polished job post from this intake.',
+              '',
+              `**Position:** ${jobDraft.title}`,
+              `**Company:** ${companyName || jobDraft.companyName}`,
+              jobDraft.location ? `**Location:** ${jobDraft.location}` : '',
+              jobDraft.employmentType ? `**Employment type:** ${jobDraft.employmentType}` : '',
+              '',
+              'I am saving it to your company dashboard now.',
+            ].filter(Boolean).join('\n')
+          )
+          await onCompanyIntakeCompleted?.(jobDraft, profile)
           setLoading(false)
           return
-        } else {
-          const profile = extractCompanyProfile([...msgs, text])
-          setProfile(profile)
         }
+
+        const nextQ = getIntakeQuestion('company', answeredCount)
+        addMessage('assistant', nextQ)
+        setLoading(false)
+        return
       }
+
+      const response = generateChatResponse(session.userType, answeredCount, text, false)
+      addMessage('assistant', response)
     } finally {
       setLoading(false)
     }
@@ -315,11 +331,11 @@ export default function ChatPage({
           <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 flex flex-col gap-2">
             <div>
               <p className="text-xs text-gray-500">Domain</p>
-              <p className="text-gray-200 text-sm font-medium capitalize">{session.candidateDomain ?? '—'}</p>
+              <p className="text-gray-200 text-sm font-medium capitalize">{session.candidateDomain ?? '-'}</p>
             </div>
             <div>
               <p className="text-xs text-gray-500">Target direction</p>
-              <p className="text-gray-200 text-sm font-medium">{session.targetDirection ?? '—'}</p>
+              <p className="text-gray-200 text-sm font-medium">{session.targetDirection ?? '-'}</p>
             </div>
             <button
               onClick={handleBuildGraph}
@@ -337,7 +353,7 @@ export default function ChatPage({
                 onClick={() => window.dispatchEvent(new CustomEvent('goto', { detail: 'graph' }))}
                 className="text-violet-400 hover:text-violet-300 text-xs"
               >
-                View graph →
+                View graph &gt;
               </button>
             )}
           </div>
@@ -363,7 +379,7 @@ export default function ChatPage({
             }}
             className="bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-3 py-2 rounded-lg transition-colors"
           >
-            Run Match →
+            Run Match &gt;
           </button>
         )}
       </div>
@@ -490,7 +506,7 @@ function StructuredAnswerPanel({
       <div className="max-w-3xl mx-auto">
         <p className="text-xs text-gray-500 mb-2">
           {isMulti ? 'Select all that apply' : 'Choose one'}
-          {question.allowManualEntry ? ' — or add your own below' : ''}
+          {question.allowManualEntry ? ' - or add your own below' : ''}
         </p>
         <div className="flex flex-col gap-3">
           {groups.map((group) => (
@@ -530,7 +546,7 @@ function StructuredAnswerPanel({
             value={manual}
             onChange={(e) => setManual(e.target.value)}
             disabled={disabled}
-            placeholder="Add your own (comma-separated)…"
+            placeholder="Add your own (comma-separated)..."
             className="mt-3 w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-violet-600"
           />
         )}
@@ -562,4 +578,10 @@ function delay(ms: number) {
 function countCandidateAnswers(priorMessages: ChatMessage[], latestUserMessage: string) {
   const priorUserMessages = priorMessages.filter(m => m.role === 'user' && m.content.trim().length > 0)
   return priorUserMessages.length + (latestUserMessage.trim() ? 1 : 0)
+}
+
+function resolveRoleSelection(question: StructuredQuestion, answer: StructuredAnswer): string | null {
+  if (!question.id.startsWith('sq_role_')) return null
+  if (answer.selectedLabels[0]) return answer.selectedLabels[0]
+  return answer.manualEntries[0]?.trim() || null
 }

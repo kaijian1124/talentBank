@@ -1,7 +1,7 @@
-import type { UserType, CandidateProfile, CompanyProfile, SkillNode } from '../types'
+﻿import type { UserType, CandidateProfile, CompanyProfile, JobPosting, SkillNode } from '../types'
 import { demoCandidateProfile, demoCompanyProfile } from './mockData'
 
-// ─── Role Classifier ───────────────────────────────────────────────
+// ??? Role Classifier ???????????????????????????????????????????????
 export function classifyUserType(text: string): UserType {
   const t = text.toLowerCase()
   if (t.match(/job|hire me|candidate|looking for work|apply|intern|graduate|student|skill|cv|resume|career/)) return 'candidate'
@@ -10,7 +10,7 @@ export function classifyUserType(text: string): UserType {
   return 'unknown'
 }
 
-// ─── Intake question banks ─────────────────────────────────────────
+// ??? Intake question banks ?????????????????????????????????????????
 const candidateQuestions = [
   "What is your current career goal? (e.g. backend engineer, AI developer, data scientist)",
   "What roles are you targeting right now?",
@@ -23,13 +23,12 @@ const candidateQuestions = [
 ]
 
 const companyQuestions = [
-  "What role are you hiring for?",
-  "What real problem should this person solve in the first 3 months?",
-  "What skills are must-have for this role?",
-  "What skills are nice-to-have?",
-  "What type of team environment is this? (size, pace, structure)",
-  "Is this role more about execution, research, production, or fast prototyping?",
-  "What would make a candidate truly successful in this role?",
+  "What position are you hiring for?",
+  "In plain language, what should this person do or solve in the first 3 months?",
+  "What skills or experience are truly must-have? Separate must-have from nice-to-have if you can.",
+  "Where is the job based, what employment type is it, and is there a salary range?",
+  "What should candidates know about your company, team, product, or working style?",
+  "Anything else the LLM should include so the job post is accurate and attractive?",
 ]
 
 const universityQuestions = [
@@ -58,7 +57,7 @@ export function getIntakeLength(userType: UserType): number {
   return 0
 }
 
-// ─── Skill extractor ───────────────────────────────────────────────
+// ??? Skill extractor ???????????????????????????????????????????????
 export function extractSkillsFromText(text: string): string[] {
   const known = [
     'java', 'python', 'javascript', 'typescript', 'react', 'react native',
@@ -70,7 +69,7 @@ export function extractSkillsFromText(text: string): string[] {
   return known.filter(s => lower.includes(s))
 }
 
-// ─── Verification questions ────────────────────────────────────────
+// ??? Verification questions ????????????????????????????????????????
 const verificationQuestions: Record<string, string[]> = {
   java: [
     "In a Java backend project, what is the purpose of separating Controller, Service, and Repository layers?",
@@ -102,7 +101,7 @@ export function getVerificationQuestion(skillName: string): string {
   return questions[Math.floor(Math.random() * questions.length)]
 }
 
-// ─── Verification evaluator ────────────────────────────────────────
+// ??? Verification evaluator ????????????????????????????????????????
 export function evaluateVerificationAnswer(
   skillName: string,
   answer: string
@@ -120,7 +119,7 @@ export function evaluateVerificationAnswer(
     evidenceText = 'Very brief answer provided, insufficient to verify claim.'
   } else if (lower.match(/don't know|not sure|no idea|unsure/)) {
     confidence = 0.30
-    feedback = "No problem — I've noted this as self-claimed. We can revisit it later."
+    feedback = "No problem ??I've noted this as self-claimed. We can revisit it later."
     evidenceText = 'Candidate was uncertain when asked a verification question.'
   } else if (wordCount >= 5 && wordCount < 20) {
     confidence = 0.55
@@ -128,7 +127,7 @@ export function evaluateVerificationAnswer(
     evidenceText = `Candidate gave a basic correct answer about ${skillName}.`
   } else if (lower.match(/because|example|when|project|used|implemented|worked/)) {
     confidence = 0.72
-    feedback = "Great — you gave a practical answer with context. I've marked this as conversation-verified."
+    feedback = "Great ??you gave a practical answer with context. I've marked this as conversation-verified."
     evidenceText = `Candidate explained ${skillName} with practical context and project reference.`
   } else {
     confidence = 0.62
@@ -139,7 +138,7 @@ export function evaluateVerificationAnswer(
   return { confidence, feedback, evidenceText }
 }
 
-// ─── Skill node generator ──────────────────────────────────────────
+// ??? Skill node generator ??????????????????????????????????????????
 export function generateSkillNode(
   skillName: string,
   confidence: number,
@@ -171,7 +170,7 @@ export function generateSkillNode(
   }
 }
 
-// ─── Profile extractor (mock) ──────────────────────────────────────
+// ??? Profile extractor (mock) ??????????????????????????????????????
 export function extractCandidateProfile(messages: string[]): CandidateProfile {
   const fullText = messages.join(' ').toLowerCase()
   const skills = extractSkillsFromText(fullText)
@@ -193,6 +192,40 @@ export function extractCandidateProfile(messages: string[]): CandidateProfile {
   return profile
 }
 
+export function extractCompanyJobPosting(
+  messages: string[],
+  fallbackCompanyName = 'Company'
+): Omit<JobPosting, 'id' | 'companyId' | 'fitScore' | 'status' | 'createdAt'> {
+  const answers = messages.map(cleanShortText).filter(Boolean)
+  const allText = answers.join(' ')
+  const companyName = inferCompanyName(allText) ?? fallbackCompanyName
+  const title = inferRoleTitle(answers[0] ?? '', allText)
+  const { salaryMin, salaryMax, salaryCurrency } = inferSalary(allText)
+  const location = inferLocation(allText)
+  const employmentType = inferEmploymentType(allText)
+  const skills = inferSkillLists(allText)
+  const companyIntro = buildCompanyIntro(companyName, answers[4] ?? answers[5] ?? '')
+  const description = buildExpandedJobDescription({
+    title,
+    problem: answers[1] ?? '',
+    mustHaveSkills: skills.mustHave,
+    niceToHaveSkills: skills.niceToHave,
+    companyContext: answers[4] ?? '',
+    extraContext: answers[5] ?? '',
+  })
+
+  return {
+    companyName,
+    title,
+    description,
+    salaryMin,
+    salaryMax,
+    salaryCurrency,
+    companyIntro,
+    location,
+    employmentType,
+  }
+}
 export function extractCompanyProfile(messages: string[]): CompanyProfile {
   const [
     maybeCompanyOrRole = '',
@@ -222,6 +255,79 @@ export function extractCompanyProfile(messages: string[]): CompanyProfile {
   }
 }
 
+
+type ExpandedJobInput = {
+  title: string
+  problem: string
+  mustHaveSkills: string[]
+  niceToHaveSkills: string[]
+  companyContext: string
+  extraContext: string
+}
+
+function buildExpandedJobDescription(input: ExpandedJobInput): string {
+  const problem = cleanShortText(input.problem)
+  const mustHave = input.mustHaveSkills.length ? input.mustHaveSkills.join(', ') : 'the core skills needed for this role'
+  const niceToHave = input.niceToHaveSkills.length ? input.niceToHaveSkills.join(', ') : ''
+  const context = cleanShortText([input.companyContext, input.extraContext].filter(Boolean).join(' '))
+
+  return [
+    `We are hiring a ${input.title} to help the team ${problem || 'deliver meaningful work for the business'}.`,
+    'The person in this role will be expected to understand the problem, contribute hands-on, communicate progress clearly, and turn requirements into practical outcomes.',
+    `Must-have requirements: ${mustHave}.`,
+    niceToHave ? `Nice-to-have skills: ${niceToHave}.` : '',
+    context ? `Team/company context: ${context}.` : '',
+    'A strong candidate can show relevant experience, explain their decisions, and learn quickly when the work is ambiguous.',
+  ].filter(Boolean).join('\n\n')
+}
+
+function buildCompanyIntro(companyName: string, rawContext: string): string | undefined {
+  const context = cleanShortText(rawContext)
+  if (context.length > 20) return context
+  if (!companyName || companyName === 'Company') return undefined
+  return `${companyName} is hiring through Talentbank Career OS.`
+}
+
+function inferSkillLists(allText: string): { mustHave: string[]; niceToHave: string[] } {
+  const mustMatch = allText.match(/(?:must[- ]?have|required|need|needs|requirement[s]?)[:\s]+([^.;]+)/i)
+  const niceMatch = allText.match(/(?:nice[- ]?to[- ]?have|bonus|preferred)[:\s]+([^.;]+)/i)
+  const known = extractSkillsFromText(allText).map(titleCase)
+  return {
+    mustHave: splitList(mustMatch?.[1] ?? '').concat(known).filter(unique).slice(0, 10),
+    niceToHave: splitList(niceMatch?.[1] ?? '').filter(unique).slice(0, 10),
+  }
+}
+
+function inferSalary(allText: string): { salaryMin?: number; salaryMax?: number; salaryCurrency: string } {
+  const currency = allText.match(/\b(usd|myr|rm|sgd)\b/i)?.[1]?.toUpperCase().replace('RM', 'MYR') ?? 'MYR'
+  const range = allText.match(/(?:rm|myr|usd|sgd)?\s*(\d{3,6})\s*(?:-|to|–)\s*(?:rm|myr|usd|sgd)?\s*(\d{3,6})/i)
+  if (range) return { salaryMin: Number(range[1]), salaryMax: Number(range[2]), salaryCurrency: currency }
+  const single = allText.match(/(?:salary|pay|budget)[^\d]{0,20}(\d{3,6})/i)
+  if (single) return { salaryMin: Number(single[1]), salaryCurrency: currency }
+  return { salaryCurrency: currency }
+}
+
+function inferLocation(allText: string): string | undefined {
+  if (/remote/i.test(allText)) return 'Remote'
+  const match = allText.match(/(?:based in|location is|located in|at)\s+([^,.]+)/i)
+  return match?.[1] ? cleanShortText(match[1]) : undefined
+}
+
+function inferEmploymentType(allText: string): string | undefined {
+  if (/internship|intern/i.test(allText)) return 'Internship'
+  if (/part[- ]time/i.test(allText)) return 'Part-time'
+  if (/contract|freelance/i.test(allText)) return 'Contract'
+  if (/full[- ]time/i.test(allText)) return 'Full-time'
+  return 'Full-time'
+}
+
+function titleCase(text: string): string {
+  return text.replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function unique(value: string, index: number, arr: string[]) {
+  return value.length > 0 && arr.findIndex((item) => item.toLowerCase() === value.toLowerCase()) === index
+}
 function inferRoleTitle(firstAnswer: string, allText: string): string {
   const roleMatch = allText.match(/(?:hiring for|hire|role is|position is|looking for)\s+([^,.]+)/i)
   if (roleMatch?.[1]) return cleanShortText(roleMatch[1])
@@ -242,10 +348,10 @@ function splitList(text: string): string[] {
 }
 
 function cleanShortText(text: string): string {
-  return text.trim().replace(/\s+/g, ' ').replace(/[.。]$/, '')
+  return text.trim().replace(/\\s+/g, ' ').replace(/[.?!,;:]+$/, '')
 }
 
-// ─── Confirmation summary ──────────────────────────────────────────
+// ??? Confirmation summary ??????????????????????????????????????????
 export function generateConfirmationSummary(profile: CandidateProfile): string {
   const skills = profile.claimedSkills.map(s => s.skillName).join(', ')
   const projects = profile.projects.map(p => p.name).join(', ')
@@ -253,15 +359,15 @@ export function generateConfirmationSummary(profile: CandidateProfile): string {
 
   return `Here is what I understood about you:
 
-📌 **Target role:** ${profile.careerGoal ?? 'Not specified'}
-🛠 **Skills mentioned:** ${skills || 'None detected yet'}
-📁 **Projects:** ${projects || 'None mentioned'}
-⚠️ **Missing evidence:** ${missing || 'None identified'}
+?? **Target role:** ${profile.careerGoal ?? 'Not specified'}
+?? **Skills mentioned:** ${skills || 'None detected yet'}
+?? **Projects:** ${projects || 'None mentioned'}
+?? **Missing evidence:** ${missing || 'None identified'}
 
 Is this correct? You can confirm, correct anything, or add missing details.`
 }
 
-// ─── Chat response generator ───────────────────────────────────────
+// ??? Chat response generator ???????????????????????????????????????
 export function generateChatResponse(
   userType: UserType,
   step: number,
@@ -275,12 +381,10 @@ export function generateChatResponse(
   }
 
   const nextQ = getIntakeQuestion(userType, step)
-  const total = getIntakeLength(userType)
 
   if (!nextQ) {
-    return `Thanks — I have gathered enough information. Let me now build your Talent Graph. Click **"Generate Graph"** when you're ready.`
+    return `Thanks ??I have gathered enough information. Let me now build your Talent Graph. Click **"Generate Graph"** when you're ready.`
   }
 
-  const stepLabel = `*(${step + 1}/${total})*`
-  return `${stepLabel} ${nextQ}`
+  return nextQ
 }

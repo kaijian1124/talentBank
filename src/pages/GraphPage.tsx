@@ -1,14 +1,17 @@
 import { useSessionStore } from '../store/sessionStore'
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import {
   ReactFlow,
   Background,
   Controls,
   MiniMap,
+  Handle,
+  Position,
   useNodesState,
   useEdgesState,
   type Node,
   type Edge,
+  MarkerType,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import type {
@@ -19,7 +22,7 @@ import { demoTalentGraph } from '../services/mockData'
 import { demoCompanyProfile } from '../services/mockData'
 import { matchCandidateToCompany } from '../services/matchingService'
 
-// ─── GraphPage router: capability graph (candidate) vs skill graph ──
+// ?????? GraphPage router: capability graph (candidate) vs skill graph ????
 export default function GraphPage() {
   const capabilityGraph = useSessionStore(s => s.session?.capabilityGraph)
   return capabilityGraph
@@ -164,7 +167,7 @@ function TalentGraphView() {
         <div className="p-4 border-b border-gray-800">
           <h2 className="text-white font-semibold mb-1">Talent Graph</h2>
           <p className="text-gray-500 text-xs">
-            {graph.nodes.length} nodes · {graph.edges.length} edges · {graph.superNodes.length} super node(s)
+            {graph.nodes.length} nodes 蝜?{graph.edges.length} edges 蝜?{graph.superNodes.length} super node(s)
           </p>
         </div>
 
@@ -202,8 +205,8 @@ function TalentGraphView() {
         <div className="p-4 border-b border-gray-800">
           <p className="text-xs text-gray-500 uppercase tracking-widest mb-2">Confidence</p>
           {[
-            { color: 'bg-emerald-500', label: '80–100% Strong' },
-            { color: 'bg-amber-500', label: '60–79% Moderate' },
+            { color: 'bg-emerald-500', label: '80??00% Strong' },
+            { color: 'bg-amber-500', label: '60??9% Moderate' },
             { color: 'bg-red-500', label: 'Below 60% Weak' },
           ].map(({ color, label }) => (
             <div key={label} className="flex items-center gap-2 mb-1.5">
@@ -221,7 +224,7 @@ function TalentGraphView() {
               <p className="text-xs text-amber-400 uppercase tracking-widest">Missing Evidence</p>
             </div>
             {profile.missingInfo.map(m => (
-              <p key={m} className="text-gray-400 text-xs mb-1">· {m}</p>
+              <p key={m} className="text-gray-400 text-xs mb-1">蝜?{m}</p>
             ))}
           </div>
         )}
@@ -249,6 +252,7 @@ function TalentGraphView() {
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
           fitView
+          fitViewOptions={{ padding: 0.25 }}
           className="bg-gray-950"
         >
           <Background color="#1f2937" gap={20} />
@@ -266,7 +270,7 @@ function TalentGraphView() {
   )
 }
 
-// ─── Candidate Capability Graph view ────────────────────────────────
+// ?????? Candidate Capability Graph view ????????????????????????????????????????????????????????????????
 const CAP_TYPE_STYLE: Record<CapabilityNodeType, { label: string; border: string; text: string; dot: string; edge: string }> = {
   target_direction: { label: 'Target', border: 'border-amber-500', text: 'text-amber-300', dot: 'bg-amber-500', edge: '#f59e0b' },
   experience: { label: 'Experience', border: 'border-blue-500', text: 'text-blue-300', dot: 'bg-blue-500', edge: '#3b82f6' },
@@ -299,20 +303,29 @@ function buildCapFlowNodes(graph: CandidateCapabilityGraph): Node[] {
 }
 
 function buildCapFlowEdges(graph: CandidateCapabilityGraph): Edge[] {
-  return graph.edges.map(e => {
-    const fromNode = graph.nodes.find(n => n.id === e.from)
-    const stroke = fromNode ? CAP_TYPE_STYLE[fromNode.type].edge : '#4b5563'
-    return {
-      id: e.id,
-      source: e.from,
-      target: e.to,
-      label: e.type.replace(/_/g, ' '),
-      animated: e.type === 'demonstrates' || e.type === 'transfers_to',
-      style: { stroke, strokeWidth: Math.max(1.2, (e.weight ?? 0.6) * 3) },
-      labelStyle: { fill: '#9ca3af', fontSize: 10 },
-      labelBgStyle: { fill: '#111827' },
-    }
-  })
+  const nodeIds = new Set(graph.nodes.map((node) => node.id))
+  return graph.edges
+    .filter((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to))
+    .map(e => {
+      const fromNode = graph.nodes.find(n => n.id === e.from)
+      const stroke = fromNode ? CAP_TYPE_STYLE[fromNode.type].edge : '#8b5cf6'
+      return {
+        id: e.id,
+        source: e.from,
+        target: e.to,
+        sourceHandle: 'source-right',
+        targetHandle: 'target-left',
+        label: e.type.replace(/_/g, ' '),
+        type: 'smoothstep',
+        animated: e.type === 'demonstrates' || e.type === 'transfers_to',
+        markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+        zIndex: 10,
+        interactionWidth: 28,
+        style: { stroke, strokeWidth: Math.max(2.5, (e.weight ?? 0.6) * 4), opacity: 0.95 },
+        labelStyle: { fill: '#e5e7eb', fontSize: 11, fontWeight: 600 },
+        labelBgStyle: { fill: '#111827', fillOpacity: 0.92 },
+      }
+    })
 }
 
 function CapabilityNodeCard({ data }: { data: Record<string, unknown> }) {
@@ -320,7 +333,19 @@ function CapabilityNodeCard({ data }: { data: Record<string, unknown> }) {
   const style = CAP_TYPE_STYLE[node.type]
   const pct = Math.round((node.confidence ?? 0) * 100)
   return (
-    <div className={`bg-gray-900 border ${style.border} rounded-xl px-3 py-2.5 w-48 shadow-lg`}>
+    <div className={`relative bg-gray-900 border ${style.border} rounded-xl px-3 py-2.5 w-48 shadow-lg`}>
+      <Handle
+        type="target"
+        id="target-left"
+        position={Position.Left}
+        className="!w-2 !h-2 !bg-gray-300 !border-gray-950 !opacity-80"
+      />
+      <Handle
+        type="source"
+        id="source-right"
+        position={Position.Right}
+        className="!w-2 !h-2 !bg-gray-300 !border-gray-950 !opacity-80"
+      />
       <div className="flex items-center gap-1.5 mb-1">
         <span className={`w-2 h-2 rounded-full ${style.dot}`} />
         <span className={`text-[10px] uppercase tracking-wider font-semibold ${style.text}`}>{style.label}</span>
@@ -341,8 +366,13 @@ function CapabilityGraphView({ graph }: { graph: CandidateCapabilityGraph }) {
   const domain = useSessionStore(s => s.session?.candidateDomain)
   const target = useSessionStore(s => s.session?.targetDirection)
 
-  const [nodes, , onNodesChange] = useNodesState(buildCapFlowNodes(graph))
-  const [edges, , onEdgesChange] = useEdgesState(buildCapFlowEdges(graph))
+  const [nodes, setNodes, onNodesChange] = useNodesState(buildCapFlowNodes(graph))
+  const [edges, setEdges, onEdgesChange] = useEdgesState(buildCapFlowEdges(graph))
+
+  useEffect(() => {
+    setNodes(buildCapFlowNodes(graph))
+    setEdges(buildCapFlowEdges(graph))
+  }, [graph, setEdges, setNodes])
 
   const usedTypes = CAP_TYPE_ORDER.filter(t => graph.nodes.some(n => n.type === t))
 
@@ -353,16 +383,16 @@ function CapabilityGraphView({ graph }: { graph: CandidateCapabilityGraph }) {
         <div className="p-4 border-b border-gray-800">
           <h2 className="text-white font-semibold mb-1">Capability Graph</h2>
           <p className="text-gray-500 text-xs">
-            {graph.nodes.length} nodes · {graph.edges.length} edges · {Math.round(graph.confidence * 100)}% confidence
+            {graph.nodes.length} nodes 蝜?{graph.edges.length} edges 蝜?{Math.round(graph.confidence * 100)}% confidence
           </p>
         </div>
 
         <div className="p-4 border-b border-gray-800">
           <p className="text-xs text-gray-500 uppercase tracking-widest mb-2">Candidate</p>
           <p className="text-gray-500 text-xs">Domain</p>
-          <p className="text-white text-sm font-medium capitalize mb-2">{domain ?? '—'}</p>
+          <p className="text-white text-sm font-medium capitalize mb-2">{domain ?? '-'}</p>
           <p className="text-gray-500 text-xs">Target direction</p>
-          <p className="text-white text-sm font-medium">{target ?? '—'}</p>
+          <p className="text-white text-sm font-medium">{target ?? '-'}</p>
         </div>
 
         {/* Node type legend */}
@@ -384,7 +414,7 @@ function CapabilityGraphView({ graph }: { graph: CandidateCapabilityGraph }) {
               <p className="text-xs text-amber-400 uppercase tracking-widest">Missing Evidence</p>
             </div>
             {graph.missingEvidence.map(m => (
-              <p key={m} className="text-gray-400 text-xs mb-1">· {m}</p>
+              <p key={m} className="text-gray-400 text-xs mb-1">蝜?{m}</p>
             ))}
           </div>
         )}

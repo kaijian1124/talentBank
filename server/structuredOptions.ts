@@ -72,12 +72,34 @@ function toSkillsQuestion(
   const roleLabel = role?.label ?? 'this role'
   return {
     id: `sq_skills_${domain}_${roleId}`,
-    prompt: prompt || `Select the skills you have any experience with for ${roleLabel}. Add your own if something is missing.`,
+    prompt: `Which of these ${roleLabel} skills have you learned or used? Select any you know, and add others if they are missing.`,
     format: 'multi_select',
     phase: 'breadth',
     options,
     allowManualEntry: true,
   }
+}
+function toCustomRoleSkillsQuestion(
+  domain: CandidateDomain,
+  targetDirection: string,
+  prompt: string
+): StructuredQuestion {
+  return {
+    id: `sq_skills_${domain}_custom_${slugify(targetDirection)}`,
+    prompt: `What skills do you already know or have used for ${targetDirection}? Add them below.`,
+    format: 'multi_select',
+    phase: 'breadth',
+    options: [],
+    allowManualEntry: true,
+  }
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, '_') || 'role'
 }
 
 // Resolve the role the skills checklist should be built for, using the
@@ -120,9 +142,12 @@ export function assembleStructuredQuestion(
         llm.optionRequest.roleId,
         llm.targetDirection ?? req.targetDirection ?? null
       )
-      // If we cannot pin down a role, ask for the role first instead of
-      // guessing a skill list.
-      return roleId ? toSkillsQuestion(domain, roleId, prompt) : toRoleQuestion(domain, prompt)
+      // If a role is not in our seed taxonomy but the model considers
+      // it a real target direction, continue with a manual skill checklist.
+      const targetDirection = llm.targetDirection ?? req.targetDirection ?? null
+      if (roleId) return toSkillsQuestion(domain, roleId, prompt)
+      if (targetDirection) return toCustomRoleSkillsQuestion(domain, targetDirection, prompt)
+      return toRoleQuestion(domain, '')
     }
     case 'none':
     default:
@@ -142,7 +167,7 @@ export function buildNextQuestionResponse(
   return {
     phase: llm.phase,
     questionFormat: structuredQuestion?.format ?? llm.questionFormat,
-    nextQuestion: llm.nextQuestion,
+    nextQuestion: structuredQuestion?.prompt ?? llm.nextQuestion,
     structuredQuestion,
     detectedDomain: llm.detectedDomain,
     targetDirection: llm.targetDirection,

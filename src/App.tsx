@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { useSessionStore } from './store/sessionStore'
-import type { AccountUser, CandidateCapabilityGraph, CompanyProfile, UserType } from './types'
-import { getAccountUser, markIntakeCompleted, updateProfileRole } from './services/accountService'
-import { createJobFromCompanyProfile } from './services/jobService'
+import type { AccountUser, CandidateCapabilityGraph, CompanyProfile, JobPosting, UserType } from './types'
+import { getAccountUser, markIntakeCompleted, saveCandidateGraph, saveIntakeSession, updateProfileRole } from './services/accountService'
+import { createJobPosting } from './services/jobService'
 import { isSupabaseConfigured, supabase } from './services/supabaseClient'
 import AuthPage from './pages/AuthPage'
 import CandidateDashboard from './pages/CandidateDashboard'
@@ -15,8 +15,16 @@ import UniversityPage from './pages/UniversityPage'
 
 type Page = 'auth' | 'dashboard' | 'landing' | 'chat' | 'graph' | 'match' | 'university'
 
+function resumeOrStartIntake(user: AccountUser | null) {
+  if (!user) return
+  if (user.intakeSession) {
+    useSessionStore.getState().restoreSession(user.intakeSession)
+  } else if (!user.intakeCompleted) {
+    useSessionStore.getState().initSession()
+  }
+}
 function App() {
-  const { session, progress, initSession } = useSessionStore()
+  const { session, progress, initSession, restoreSession } = useSessionStore()
   const [accountUser, setAccountUser] = useState<AccountUser | null>(null)
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured)
   const [forcePage, setForcePage] = useState<Page | null>(null)
@@ -34,7 +42,7 @@ function App() {
     supabase.auth.getSession().then(async ({ data }) => {
       const user = await getAccountUser(data.session?.user ?? null)
       setAccountUser(user)
-      if (user && (!user.role || !user.intakeCompleted)) initSession()
+      resumeOrStartIntake(user)
       setAuthLoading(false)
     })
 
@@ -43,13 +51,11 @@ function App() {
       setAccountUser(user)
       setForcePage(null)
       useSessionStore.getState().resetSession()
-      if (user && (!user.role || !user.intakeCompleted)) {
-        useSessionStore.getState().initSession()
-      }
+      resumeOrStartIntake(user)
     })
 
     return () => listener.subscription.unsubscribe()
-  }, [initSession])
+  }, [initSession, restoreSession])
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -60,6 +66,20 @@ function App() {
     return () => window.removeEventListener('goto', handler)
   }, [])
 
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !accountUser || !session) return
+    const timeout = window.setTimeout(() => {
+      saveIntakeSession(
+        accountUser.id,
+        session,
+        accountUser.role ?? (session.userType !== 'unknown' ? session.userType : null)
+      ).catch((error) => {
+        console.error('Failed to save intake session:', error)
+      })
+    }, 500)
+    return () => window.clearTimeout(timeout)
+  }, [accountUser, session])
   useEffect(() => {
     if (accountUser && !accountUser.role && !session) {
       initSession()
@@ -102,7 +122,8 @@ function App() {
   }
 
   const handleStartIntake = () => {
-    initSession()
+    if (accountUser?.intakeSession && !accountUser.intakeCompleted) restoreSession(accountUser.intakeSession)
+    else initSession()
     setForcePage(null)
   }
 
@@ -131,16 +152,34 @@ function App() {
 
   const handleIntakeCompleted = async (graph?: CandidateCapabilityGraph) => {
     if (!accountUser) return
-    const candidateGraph = graph ?? useSessionStore.getState().session?.capabilityGraph ?? null
+    const currentSession = useSessionStore.getState().session
+    const candidateGraph = graph ?? currentSession?.capabilityGraph ?? null
+    const sessionToSave = currentSession
+      ? { ...currentSession, capabilityGraph: candidateGraph }
+      : currentSession
     const updated = isSupabaseConfigured
-      ? await markIntakeCompleted(accountUser.id, candidateGraph)
-      : { ...accountUser, intakeCompleted: true, candidateGraph: candidateGraph }
+      ? await saveCandidateGraph(accountUser.id, candidateGraph, sessionToSave)
+      : { ...accountUser, candidateGraph, intakeSession: sessionToSave }
     if (updated) setAccountUser(updated)
   }
 
-  const handleCompanyIntakeCompleted = async (profile: CompanyProfile) => {
+  const handleCompanyIntakeCompleted = async (
+    jobDraft: Omit<JobPosting, 'id' | 'companyId' | 'fitScore' | 'status' | 'createdAt'>,
+    profile: CompanyProfile
+  ) => {
     if (!accountUser) return
-    await createJobFromCompanyProfile(accountUser.id, profile)
+    await createJobPosting({
+      companyId: accountUser.id,
+      companyName: accountUser.displayName || jobDraft.companyName || 'Company',
+      title: jobDraft.title,
+      description: jobDraft.description,
+      salaryMin: jobDraft.salaryMin,
+      salaryMax: jobDraft.salaryMax,
+      salaryCurrency: jobDraft.salaryCurrency || 'MYR',
+      companyIntro: jobDraft.companyIntro,
+      location: jobDraft.location,
+      employmentType: jobDraft.employmentType,
+    })
     const updated = isSupabaseConfigured
       ? await markIntakeCompleted(accountUser.id, null, profile)
       : { ...accountUser, intakeCompleted: true, companyProfile: profile }
@@ -220,6 +259,7 @@ function App() {
         <ChatPage
           onSkip={handleSkipIntake}
           onRoleSelected={handleRoleSelected}
+          companyName={accountUser?.displayName ?? undefined}
           onIntakeCompleted={handleIntakeCompleted}
           onCompanyIntakeCompleted={handleCompanyIntakeCompleted}
         />

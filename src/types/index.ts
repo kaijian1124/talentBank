@@ -382,6 +382,7 @@ export interface AccountUser {
   intakeCompleted: boolean
   candidateGraph?: CandidateCapabilityGraph | null
   companyProfile?: CompanyProfile | null
+  intakeSession?: UserSession | null
 }
 
 export interface JobPosting {
