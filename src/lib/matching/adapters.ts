@@ -1,4 +1,4 @@
-﻿import type { AccountUser, CapabilityNode, JobPosting } from '../../types'
+import type { AccountUser, CapabilityNode, JobPosting } from '../../types'
 import type { CandidateProfile, CandidateSkill, ExperienceLevel, JobProfile } from './types'
 import { getKnownSkills, normalizeSkill } from './skillGraph'
 
@@ -31,6 +31,8 @@ export function candidateProfileFromAccount(user: AccountUser): CandidateProfile
     projects,
     preferredRoles: targetRoles.length ? targetRoles : undefined,
     experienceLevel: inferCandidateExperienceLevel(nodes),
+    preferredLocation: extractPreferredLocation(user),
+    expectedSalary: extractExpectedSalary(user),
   }
 }
 
@@ -55,6 +57,52 @@ export function jobProfileFromPosting(job: JobPosting): JobProfile {
   }
 }
 
+function extractExpectedSalary(user: AccountUser): number | undefined {
+  const profile = user.intakeSession?.structuredProfile
+  const preferences = isRecord(profile) && isRecord(profile.preferences) ? profile.preferences : null
+  const candidates = [
+    preferences?.expectedSalary,
+    preferences?.expected_salary,
+    preferences?.salaryExpectation,
+    preferences?.salary_expectation,
+    preferences?.expectedPay,
+    preferences?.payExpectation,
+    preferences?.salary,
+  ]
+  for (const value of candidates) {
+    const parsed = parseSalary(value)
+    if (parsed) return parsed
+  }
+  const preferenceLabels = user.candidateGraph?.nodes
+    .filter((node) => node.type === 'preference')
+    .map((node) => node.label) ?? []
+  for (const label of preferenceLabels) {
+    const parsed = parseSalary(label)
+    if (parsed) return parsed
+  }
+  return undefined
+}
+
+function extractPreferredLocation(user: AccountUser): string | undefined {
+  const profile = user.intakeSession?.structuredProfile
+  const preferences = isRecord(profile) && isRecord(profile.preferences) ? profile.preferences : null
+  const value = preferences?.location ?? preferences?.preferredLocation ?? preferences?.preferred_location
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function parseSalary(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.round(value)
+  if (typeof value !== 'string') return undefined
+  const normalized = value.replace(/,/g, '')
+  const match = normalized.match(/(?:myr|rm)?\s*(\d{3,7})/i)
+  if (!match) return undefined
+  const parsed = Number(match[1])
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
 function toCandidateSkill(node: CapabilityNode): CandidateSkill {
   return {
     name: node.label,

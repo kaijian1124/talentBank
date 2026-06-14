@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSessionStore } from './store/sessionStore'
 import type { AccountUser, CandidateCapabilityGraph, CompanyProfile, JobPosting, UserType } from './types'
 import { getAccountUser, markIntakeCompleted, saveCandidateGraph, saveIntakeSession, updateProfileRole } from './services/accountService'
@@ -244,6 +244,7 @@ function App() {
           user={accountUser}
           onStartIntake={handleStartIntake}
           onLogout={handleLogout}
+          onUserUpdated={setAccountUser}
         />
       )}
       {page === 'dashboard' && accountUser?.role === 'company' && (

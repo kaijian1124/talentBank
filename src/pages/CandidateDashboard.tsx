@@ -1,21 +1,25 @@
-﻿import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, Briefcase, Building2, CheckCircle2, Loader2, LogOut, MessageCircle, Network, Search, Send, X } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { ArrowRight, Briefcase, Building2, CheckCircle2, Compass, DollarSign, Loader2, LogOut, MessageCircle, Network, Search, Send, Sparkles, X } from 'lucide-react'
 import type { AccountUser, CandidateCapabilityGraph, JobPosting, MessageThread, ThreadMessage } from '../types'
 import type { MatchResult as HybridMatchResult } from '../lib/matching'
 import { candidateProfileFromAccount, jobProfileFromPosting, matchCandidateToJob } from '../lib/matching'
 import { applyToJob, getCandidateJobs, notifyCompanyOfRecommendedCandidate } from '../services/jobService'
 import { getThreadMessages, getThreadsForUser, sendThreadMessage, subscribeToThreadMessages } from '../services/messageService'
 import { buildCompanyRoleGraphFromJob } from '../services/companyGraph'
+import { buildCandidateModuleInsights, type CandidateModuleInsights } from '../services/candidateModules'
+import { updateCandidateExpectedSalary } from '../services/accountService'
 import { CapabilityGraphView } from './GraphPage'
 
 export default function CandidateDashboard({
   user,
   onStartIntake,
   onLogout,
+  onUserUpdated,
 }: {
   user: AccountUser
   onStartIntake: () => void
   onLogout: () => void
+  onUserUpdated: (user: AccountUser) => void
 }) {
   const [jobs, setJobs] = useState<JobPosting[]>([])
   const [jobMatches, setJobMatches] = useState<Record<string, HybridMatchResult>>({})
@@ -29,13 +33,21 @@ export default function CandidateDashboard({
   const [reply, setReply] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [activeGraph, setActiveGraph] = useState<{ graph: CandidateCapabilityGraph; title: string } | null>(null)
+  const [moduleInsights, setModuleInsights] = useState<CandidateModuleInsights | null>(null)
+  const [isInsightLoading, setIsInsightLoading] = useState(false)
+  const [dashboardUser, setDashboardUser] = useState(user)
+  const [isSalarySaving, setIsSalarySaving] = useState(false)
+
+  useEffect(() => {
+    setDashboardUser(user)
+  }, [user])
 
   useEffect(() => {
     let ignore = false
     setIsLoading(true)
-    Promise.all([getCandidateJobs(keyword), getThreadsForUser(user)])
+    Promise.all([getCandidateJobs(keyword), getThreadsForUser(dashboardUser)])
       .then(async ([jobResult, threadResult]) => {
-        const candidateProfile = candidateProfileFromAccount(user)
+        const candidateProfile = candidateProfileFromAccount(dashboardUser)
         const matchPairs = await Promise.all(jobResult.map(async (job) => {
           const match = await matchCandidateToJob(candidateProfile, jobProfileFromPosting(job))
           return [job.id, match] as const
@@ -48,10 +60,19 @@ export default function CandidateDashboard({
         setJobMatches(matchMap)
         setJobs(scoredJobs)
         setThreads(threadResult)
+        setIsInsightLoading(true)
+        buildCandidateModuleInsights({ user: dashboardUser, jobs: scoredJobs, matches: matchMap })
+          .then((insights) => {
+            if (!ignore) setModuleInsights(insights)
+          })
+          .catch((error) => console.error('Failed to build candidate module insights', error))
+          .finally(() => {
+            if (!ignore) setIsInsightLoading(false)
+          })
         void Promise.all(
           scoredJobs
             .filter((job) => (matchMap[job.id]?.finalScore ?? 0) >= 80)
-            .map((job) => notifyCompanyOfRecommendedCandidate(job, user, matchMap[job.id]))
+            .map((job) => notifyCompanyOfRecommendedCandidate(job, dashboardUser, matchMap[job.id]))
         ).catch((error) => console.error('Failed to create company recommendation notification', error))
       })
       .catch((error) => {
@@ -63,7 +84,7 @@ export default function CandidateDashboard({
     return () => {
       ignore = true
     }
-  }, [keyword, user])
+  }, [keyword, dashboardUser])
 
   useEffect(() => {
     if (!activeThread) return undefined
@@ -87,12 +108,26 @@ export default function CandidateDashboard({
 
   const totalJobs = useMemo(() => jobs.length, [jobs])
 
+  const handleExpectedSalarySave = async (expectedSalary: number) => {
+    setMessage('')
+    setIsSalarySaving(true)
+    try {
+      const updated = await updateCandidateExpectedSalary(dashboardUser, expectedSalary)
+      setDashboardUser(updated)
+      onUserUpdated(updated)
+      setMessage('Expected salary updated.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to update expected salary.')
+    } finally {
+      setIsSalarySaving(false)
+    }
+  }
   const handleApply = async (job: JobPosting) => {
     setMessage('')
     try {
-      await applyToJob(job, user.id)
+      await applyToJob(job, dashboardUser.id)
       setAppliedJobIds((current) => new Set(current).add(job.id))
-      const updatedThreads = await getThreadsForUser(user)
+      const updatedThreads = await getThreadsForUser(dashboardUser)
       setThreads(updatedThreads)
       setMessage(`Application sent to ${job.companyName}. You can message them when they reply.`)
     } catch (error) {
@@ -104,7 +139,7 @@ export default function CandidateDashboard({
     if (!activeThread || !reply.trim()) return
     setIsSending(true)
     try {
-      const sent = await sendThreadMessage(activeThread.id, user.id, 'candidate', reply)
+      const sent = await sendThreadMessage(activeThread.id, dashboardUser.id, 'candidate', reply)
       setThreadMessages((current) => current.some((item) => item.id === sent.id) ? current : [...current, sent])
       setThreads((current) => current.map((thread) => thread.id === activeThread.id ? { ...thread, lastMessage: sent.body, updatedAt: sent.createdAt } : thread))
       setReply('')
@@ -143,7 +178,7 @@ export default function CandidateDashboard({
       </section>
 
       <section className="max-w-6xl mx-auto px-5 py-6">
-        {!user.intakeCompleted && (
+        {!dashboardUser.intakeCompleted && (
           <div className="bg-violet-950 border border-violet-800 rounded-lg p-4 mb-5 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div>
               <p className="text-white font-semibold mb-1">Complete your Career OS intake</p>
@@ -162,10 +197,17 @@ export default function CandidateDashboard({
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
           <SummaryCard icon={<Briefcase size={16} />} label="Open roles" value={String(totalJobs)} />
-          <SummaryCard icon={<CheckCircle2 size={16} />} label="Hybrid matching" value={user.candidateGraph ? 'Active' : 'Limited'} />
+          <SummaryCard icon={<CheckCircle2 size={16} />} label="Hybrid matching" value={dashboardUser.candidateGraph ? 'Active' : 'Limited'} />
           <SummaryCard icon={<Building2 size={16} />} label="Application status" value={`${appliedJobIds.size} sent`} />
           <SummaryCard icon={<MessageCircle size={16} />} label="Messages" value={String(threads.length)} />
         </div>
+
+        <CandidateModulesPanel
+          insights={moduleInsights}
+          isLoading={isInsightLoading}
+          isSavingExpectedSalary={isSalarySaving}
+          onSaveExpectedSalary={handleExpectedSalarySave}
+        />
 
         {message && (
           <p className="border border-gray-800 bg-gray-900 text-gray-300 text-sm rounded-lg px-4 py-3 mb-4">{message}</p>
@@ -254,7 +296,7 @@ export default function CandidateDashboard({
       )}
       {activeThread && (
         <MessageModal
-          user={user}
+          user={dashboardUser}
           thread={activeThread}
           messages={threadMessages}
           reply={reply}
@@ -265,6 +307,182 @@ export default function CandidateDashboard({
         />
       )}
     </main>
+  )
+}
+
+function CandidateModulesPanel({
+  insights,
+  isLoading,
+  isSavingExpectedSalary,
+  onSaveExpectedSalary,
+}: {
+  insights: CandidateModuleInsights | null
+  isLoading: boolean
+  isSavingExpectedSalary: boolean
+  onSaveExpectedSalary: (value: number) => Promise<void>
+}) {
+  if (isLoading && !insights) {
+    return (
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-5 text-gray-400 text-sm">
+        Building Career OS insights...
+      </div>
+    )
+  }
+
+  if (!insights) return null
+
+  const fairPay = insights.fairPay
+  const salaryRange = fairPay.salaryMin && fairPay.salaryMax
+    ? `${fairPay.salaryCurrency} ${fairPay.salaryMin.toLocaleString()} - ${fairPay.salaryMax.toLocaleString()}`
+    : 'Not enough salary data yet'
+  const expectedSalary = fairPay.expectedSalary
+    ? `${fairPay.salaryCurrency} ${fairPay.expectedSalary.toLocaleString()}`
+    : 'Not set yet'
+
+  return (
+    <section className="mb-5">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div>
+          <h2 className="text-white font-semibold">Career OS Insights</h2>
+          <p className="text-gray-500 text-sm">Candidate modules generated from your graph, salary data, and hybrid matching.</p>
+        </div>
+        <span className="text-[11px] uppercase tracking-widest text-gray-500 border border-gray-800 rounded-full px-2 py-1">
+          {insights.source === 'llm' ? 'AI generated' : 'Fallback'}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+        <InsightCard icon={<Sparkles size={16} />} title="AI Career Coach">
+          <p className="text-white text-sm font-semibold mb-2">{insights.careerCoach.title}</p>
+          <ul className="space-y-1.5 mb-3">
+            {insights.careerCoach.nextActions.map((action) => (
+              <li key={action} className="text-gray-400 text-sm leading-relaxed">- {action}</li>
+            ))}
+          </ul>
+          <p className="text-gray-300 text-sm leading-relaxed mb-1">{insights.careerCoach.projectSuggestion}</p>
+          <p className="text-gray-500 text-xs leading-relaxed">{insights.careerCoach.interviewStory}</p>
+        </InsightCard>
+
+        <InsightCard icon={<DollarSign size={16} />} title="Fair Pay Engine">
+          <div className="space-y-2 text-sm">
+            <InfoRow label="Position" value={fairPay.position} />
+            <InfoRow label="Salary range" value={salaryRange} />
+            <InfoRow label="Your expected salary" value={expectedSalary} />
+            <ExpectedSalaryEditor
+              currency={fairPay.salaryCurrency}
+              currentValue={fairPay.expectedSalary}
+              isSaving={isSavingExpectedSalary}
+              onSave={onSaveExpectedSalary}
+            />
+            <InfoRow label="Pay fit" value={fairPay.payFit} strong={fairPay.payFit === 'Good'} danger={fairPay.payFit === 'Bad'} />
+          </div>
+          <p className="text-gray-400 text-sm leading-relaxed mt-3">{fairPay.negotiationNote}</p>
+        </InsightCard>
+
+        <InsightCard icon={<Compass size={16} />} title="Life Chapter Designer">
+          <p className="text-white text-sm font-semibold mb-2">{insights.lifeChapter.chapter}</p>
+          <ul className="space-y-1.5 mb-3">
+            {insights.lifeChapter.priorities.map((priority) => (
+              <li key={priority} className="text-gray-400 text-sm leading-relaxed">- {priority}</li>
+            ))}
+          </ul>
+          <p className="text-gray-300 text-sm leading-relaxed">{insights.lifeChapter.matchingAdvice}</p>
+        </InsightCard>
+      </div>
+    </section>
+  )
+}
+
+
+function ExpectedSalaryEditor({
+  currency,
+  currentValue,
+  isSaving,
+  onSave,
+}: {
+  currency: string
+  currentValue?: number
+  isSaving: boolean
+  onSave: (value: number) => Promise<void>
+}) {
+  const [value, setValue] = useState(currentValue ? String(currentValue) : '')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setValue(currentValue ? String(currentValue) : '')
+    setError('')
+  }, [currentValue])
+
+  const handleSave = async () => {
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setError('Enter a valid expected salary.')
+      return
+    }
+    setError('')
+    await onSave(Math.round(parsed))
+  }
+
+  return (
+    <div className="rounded-lg border border-gray-800 bg-gray-950/70 p-3">
+      <label className="block text-gray-500 text-xs mb-2" htmlFor="expected-salary-input">Edit expected salary</label>
+      <div className="flex gap-2">
+        <div className="flex items-center gap-2 flex-1 min-w-0 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2 focus-within:border-violet-600">
+          <span className="text-gray-500 text-xs font-semibold shrink-0">{currency}</span>
+          <input
+            id="expected-salary-input"
+            type="number"
+            min="1"
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void handleSave()
+            }}
+            placeholder="5000"
+            className="w-full min-w-0 bg-transparent text-sm text-white placeholder-gray-600 focus:outline-none"
+          />
+        </div>
+        <button
+          onClick={() => void handleSave()}
+          disabled={isSaving}
+          className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors"
+        >
+          {isSaving ? 'Saving' : 'Save'}
+        </button>
+      </div>
+      {error && <p className="text-red-300 text-xs mt-2">{error}</p>}
+    </div>
+  )
+}
+function InsightCard({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+  return (
+    <article className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+      <div className="flex items-center gap-2 text-violet-400 mb-3">
+        {icon}
+        <h3 className="text-white text-sm font-semibold">{title}</h3>
+      </div>
+      {children}
+    </article>
+  )
+}
+
+function InfoRow({
+  label,
+  value,
+  strong = false,
+  danger = false,
+}: {
+  label: string
+  value: string
+  strong?: boolean
+  danger?: boolean
+}) {
+  const valueClass = danger ? 'text-red-300' : strong ? 'text-emerald-300' : 'text-gray-100'
+  return (
+    <div className="flex items-start justify-between gap-3 border-b border-gray-800/70 pb-1.5 last:border-b-0">
+      <span className="text-gray-500">{label}</span>
+      <span className={`${valueClass} text-right font-medium`}>{value}</span>
+    </div>
   )
 }
 

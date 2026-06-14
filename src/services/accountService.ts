@@ -1,4 +1,4 @@
-﻿import type { AccountUser, CandidateCapabilityGraph, CompanyProfile, UserSession, UserType } from '../types'
+import type { AccountUser, CandidateCapabilityGraph, CompanyProfile, UserSession, UserType } from '../types'
 import { isSupabaseConfigured, supabase } from './supabaseClient'
 
 type BaseProfileRow = {
@@ -142,6 +142,44 @@ export async function markIntakeCompleted(
   return hydrateAccountUser(base)
 }
 
+export async function updateCandidateExpectedSalary(user: AccountUser, expectedSalary: number): Promise<AccountUser> {
+  const currentSession = user.intakeSession ?? createCandidatePreferenceSession(user)
+  const currentProfile = currentSession.structuredProfile && 'preferences' in currentSession.structuredProfile
+    ? currentSession.structuredProfile
+    : createEmptyCandidateProfile(user)
+  const preferences = {
+    ...currentProfile.preferences,
+    expectedSalary: String(expectedSalary),
+  }
+  const updatedSession: UserSession = {
+    ...currentSession,
+    userType: 'candidate',
+    structuredProfile: {
+      ...currentProfile,
+      preferences,
+    },
+    updatedAt: Date.now(),
+  }
+
+  if (!supabase) {
+    return {
+      ...user,
+      intakeSession: updatedSession,
+    }
+  }
+
+  const { error } = await supabase
+    .from('candidate_profiles')
+    .upsert({
+      user_id: user.id,
+      intake_session: updatedSession,
+      ...(user.candidateGraph ? { candidate_graph: user.candidateGraph } : {}),
+    }, { onConflict: 'user_id' })
+
+  if (error) throw new Error(error.message)
+  const base = await getBaseProfile(user.id)
+  return base ? hydrateAccountUser(base) : { ...user, intakeSession: updatedSession }
+}
 export async function saveIntakeSession(
   userId: string,
   session: UserSession | null,
@@ -331,6 +369,43 @@ async function hydrateAccountUser(base: BaseProfileRow): Promise<AccountUser> {
   }
 }
 
+function createCandidatePreferenceSession(user: AccountUser): UserSession {
+  const now = Date.now()
+  return {
+    id: `salary_${user.id}`,
+    userType: 'candidate',
+    messages: [],
+    structuredProfile: createEmptyCandidateProfile(user),
+    graph: null,
+    matchResult: null,
+    intakeStep: 0,
+    verificationQueue: [],
+    createdAt: now,
+    updatedAt: now,
+    capabilityGraph: user.candidateGraph ?? null,
+    candidateDomain: null,
+    targetDirection: null,
+    readyToBuild: Boolean(user.candidateGraph),
+    intakePhase: 'ready',
+    structuredAnswers: [],
+    pendingQuestion: null,
+  }
+}
+
+function createEmptyCandidateProfile(user: AccountUser) {
+  return {
+    name: user.displayName ?? user.email,
+    careerGoal: undefined,
+    targetRoles: [],
+    claimedSkills: [],
+    verifiedSkills: [],
+    projects: [],
+    experiences: [],
+    preferences: {},
+    missingInfo: [],
+    confidence: 0,
+  }
+}
 function toBaseProfile(row: BaseProfileRow): BaseProfileRow {
   return {
     id: row.id,
