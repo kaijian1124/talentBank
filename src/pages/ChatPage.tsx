@@ -48,7 +48,7 @@ export default function ChatPage({
   useEffect(() => {
     if (!hasInitialized.current && session && session.messages.length === 0) {
         hasInitialized.current = true
-        addMessage('assistant', "Welcome to Talentbank ??\n\nAre you here as a **Candidate**, **Company**, or **University**?\n\nFeel free to describe yourself naturally ??I'll figure it out.")
+        addMessage('assistant', "Welcome to Talentbank.\n\nAre you here as a **Candidate**, **Company**, or **University**?\n\nFeel free to describe yourself naturally. I'll figure it out.")
     }
   }, [session, addMessage])
 
@@ -56,9 +56,7 @@ export default function ChatPage({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [session?.messages])
 
-  if (!session) return null
-
-  // ??? Candidate path (real LLM via local API) ??????????????????????
+  if (!session) return null  // Candidate path (real LLM via local API)
   const handleCandidateTurn = async (text: string, priorMessages: ChatMessage[]) => {
     const s = useSessionStore.getState().session
     if (!s) return
@@ -103,7 +101,7 @@ export default function ChatPage({
         pendingQuestion: res.structuredQuestion,
       })
     } catch (e) {
-      addMessage('assistant', `?? I couldn't reach the analysis service. ${(e as Error).message}\n\nMake sure the API server is running (\`npm run dev\`) and your key is set in \`.env.local\`.`)
+      addMessage('assistant', `I couldn't reach the analysis service. ${(e as Error).message}`)
     }
   }
 
@@ -164,10 +162,10 @@ export default function ChatPage({
       const merged = mergeGraphDelta(s.capabilityGraph, enrichedDelta)
       setCapabilityGraph(merged)
       await onIntakeCompleted?.(merged)
-      addMessage('assistant', `??Capability graph updated ??**${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening your graph...`)
+      addMessage('assistant', `Capability graph updated: **${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening your graph...`)
       window.dispatchEvent(new CustomEvent('goto', { detail: 'graph' }))
     } catch (e) {
-      addMessage('assistant', `?? Build failed. ${(e as Error).message}`)
+      addMessage('assistant', `Build failed. ${(e as Error).message}`)
     } finally {
       setLoading(false)
     }
@@ -195,7 +193,7 @@ export default function ChatPage({
         await onRoleSelected?.(detected)
 
         if (detected === 'candidate') {
-          addMessage('assistant', "Got it ??I'll set you up as a **Candidate**. I'll ask adaptive questions to turn your real experiences into evidence of capability.")
+          addMessage('assistant', "Got it. I'll set you up as a **Candidate**. I'll ask adaptive questions to turn your real experiences into evidence of capability.")
           await handleCandidateTurn(text, priorMessages)
           setLoading(false)
           return
@@ -451,8 +449,8 @@ function MessageBubble({ role, content }: { role: string; content: string }) {
 }
 
 function MarkdownText({ text }: { text: string }) {
-  // Simple bold and newline rendering
-  const parts = text.split('\n')
+  const cleanedText = sanitizeDisplayText(text)
+  const parts = cleanedText.split('\n')
   return (
     <>
       {parts.map((line, i) => {
@@ -469,6 +467,15 @@ function MarkdownText({ text }: { text: string }) {
       })}
     </>
   )
+}
+
+function sanitizeDisplayText(text: string): string {
+  return text
+    .replace(/\?{2,}/g, '')
+    .replace(/[\u0080-\u009f]/g, '')
+    .replace(/[\ue000-\uf8ff]/g, '')
+    .replace(/\s+([,.])/g, '$1')
+    .trim()
 }
 
 function StructuredAnswerPanel({

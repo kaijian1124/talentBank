@@ -1,8 +1,10 @@
 ﻿import { useEffect, useState } from 'react'
-import { Bell, Briefcase, Loader2, LogOut, Mail, MessageCircle, PlusCircle, Send, X } from 'lucide-react'
-import type { AccountUser, CompanyNotification, JobPosting, MessageThread, ThreadMessage } from '../types'
+import { Bell, Briefcase, Loader2, LogOut, Mail, MessageCircle, Network, PlusCircle, Send, X } from 'lucide-react'
+import type { AccountUser, CandidateCapabilityGraph, CompanyNotification, JobPosting, MessageThread, ThreadMessage } from '../types'
 import { closeJobPosting, createJobPosting, getCompanyJobs, getCompanyNotifications } from '../services/jobService'
 import { getOrCreateThread, getThreadMessages, sendThreadMessage, subscribeToThreadMessages } from '../services/messageService'
+import { buildCompanyRoleGraphFromJob } from '../services/companyGraph'
+import { CapabilityGraphView } from './GraphPage'
 
 export default function CompanyDashboard({
   user,
@@ -22,6 +24,7 @@ export default function CompanyDashboard({
   const [threadMessages, setThreadMessages] = useState<ThreadMessage[]>([])
   const [reply, setReply] = useState('')
   const [isSending, setIsSending] = useState(false)
+  const [activeGraph, setActiveGraph] = useState<{ graph: CandidateCapabilityGraph; title: string } | null>(null)
   const openJobs = jobs.filter((job) => job.status === 'open')
 
   useEffect(() => {
@@ -197,7 +200,14 @@ export default function CompanyDashboard({
                         )}
                       </div>
                     </div>
-                    <p className="text-gray-300 text-sm leading-relaxed">{job.description}</p>
+                    <p className="text-gray-300 text-sm leading-relaxed mb-3">{job.description}</p>
+                    <button
+                      onClick={() => setActiveGraph({ graph: buildCompanyRoleGraphFromJob(job), title: job.title })}
+                      className="inline-flex items-center gap-1.5 border border-gray-700 hover:border-violet-600 text-gray-300 hover:text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors"
+                    >
+                      <Network size={14} />
+                      View graph
+                    </button>
                   </article>
                 ))}
                 {jobs.length === 0 && (
@@ -259,6 +269,13 @@ export default function CompanyDashboard({
           }}
         />
       )}
+      {activeGraph && (
+        <RoleGraphModal
+          graph={activeGraph.graph}
+          title={activeGraph.title}
+          onClose={() => setActiveGraph(null)}
+        />
+      )}
       {activeThread && (
         <MessageModal
           user={user}
@@ -272,6 +289,34 @@ export default function CompanyDashboard({
         />
       )}
     </main>
+  )
+}
+
+function RoleGraphModal({
+  graph,
+  title,
+  onClose,
+}: {
+  graph: CandidateCapabilityGraph
+  title: string
+  onClose: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center px-4 py-6">
+      <div className="w-full max-w-6xl bg-gray-950 border border-gray-800 rounded-lg shadow-xl overflow-hidden">
+        <CapabilityGraphView
+          graph={graph}
+          title="Role Requirement Graph"
+          ownerLabel="Company Role"
+          domain="Hiring"
+          target={title}
+          backLabel="Back to Dashboard"
+          footerText="Generated from this job posting"
+          heightClass="h-[82vh]"
+          onBack={onClose}
+        />
+      </div>
+    </div>
   )
 }
 

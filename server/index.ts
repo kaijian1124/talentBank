@@ -1,4 +1,4 @@
-﻿// ??? Local API server (development) ?????????????????????????????????
+﻿// Local API server (development)
 // Boots an Express server that proxies candidate analysis to OpenAI so
 // the API key stays server-side. Run via `npm run dev:server` (tsx) or
 // alongside Vite via `npm run dev` (concurrently).
@@ -11,6 +11,7 @@ import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import { candidateRouter } from './routes/candidate'
 import { companyRouter } from './routes/company'
+import { matchingRouter } from './routes/matching'
 import { OPENAI_MODEL } from './openaiClient'
 
 const PORT = Number(process.env.PORT) || 8787
@@ -37,6 +38,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
 
 app.use('/api/candidate', candidateRouter)
 app.use('/api/company', companyRouter)
+app.use('/api/matching', matchingRouter)
 
 // Central error handler.
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -53,6 +55,6 @@ app.listen(PORT, () => {
   console.log(`[api] candidate server listening on http://localhost:${PORT} (model: ${OPENAI_MODEL})`)
   if (!process.env.OPENAI_API_KEY) {
     // eslint-disable-next-line no-console
-    console.warn('[api] OPENAI_API_KEY not set ??candidate endpoints will return an error until configured in .env.local')
+    console.warn('[api] OPENAI_API_KEY not set; candidate endpoints will return an error until configured in .env.local')
   }
 })

@@ -1,4 +1,5 @@
-import type { CompanyNotification, CompanyProfile, JobApplication, JobPosting } from '../types'
+﻿import type { AccountUser, CompanyNotification, CompanyProfile, JobApplication, JobPosting } from '../types'
+import type { MatchResult as HybridMatchResult } from '../lib/matching'
 import { getOrCreateThread } from './messageService'
 import { isSupabaseConfigured, supabase } from './supabaseClient'
 
@@ -100,6 +101,53 @@ export async function getCandidateJobs(keyword: string): Promise<JobPosting[]> {
   }))
 
   return filterAndSortJobs(jobs, keyword)
+}
+
+export async function notifyCompanyOfRecommendedCandidate(
+  job: JobPosting,
+  candidate: AccountUser,
+  match: HybridMatchResult
+): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) return
+  if (match.finalScore < 80) return
+
+  const candidateEmail = candidate.email ?? 'Unknown email'
+  const candidateName = candidate.displayName ?? candidateEmail
+  const matchedSkills = match.exactSkillMatches.slice(0, 4).join(', ')
+  const nextSkills = match.recommendedNextSkills.slice(0, 3).join(', ')
+  const messageParts = [
+    `${candidateName} is recommended for ${job.title} with ${match.finalScore}% hybrid fit.`,
+    matchedSkills ? `Matched skills: ${matchedSkills}.` : '',
+    nextSkills ? `Next skills to strengthen: ${nextSkills}.` : '',
+  ].filter(Boolean)
+
+  const { data: existing, error: existingError } = await supabase
+    .from('company_notifications')
+    .select('id')
+    .eq('company_id', job.companyId)
+    .eq('candidate_id', candidate.id)
+    .eq('job_id', job.id)
+    .eq('type', 'system_recommendation')
+    .maybeSingle()
+
+  if (existingError) throw new Error(existingError.message)
+  if (existing) return
+
+  const { error } = await supabase
+    .from('company_notifications')
+    .insert({
+      company_id: job.companyId,
+      candidate_id: candidate.id,
+      job_id: job.id,
+      type: 'system_recommendation',
+      title: 'Recommended candidate',
+      message: messageParts.join(' '),
+      candidate_email: candidateEmail,
+      candidate_name: candidateName,
+      is_read: false,
+    })
+
+  if (error) throw new Error(error.message)
 }
 
 export async function applyToJob(job: JobPosting, candidateId: string): Promise<JobApplication> {

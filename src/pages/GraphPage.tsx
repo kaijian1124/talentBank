@@ -1,4 +1,4 @@
-import { useSessionStore } from '../store/sessionStore'
+﻿import { useSessionStore } from '../store/sessionStore'
 import { useCallback, useEffect } from 'react'
 import {
   ReactFlow,
@@ -22,7 +22,7 @@ import { demoTalentGraph } from '../services/mockData'
 import { demoCompanyProfile } from '../services/mockData'
 import { matchCandidateToCompany } from '../services/matchingService'
 
-// ?????? GraphPage router: capability graph (candidate) vs skill graph ????
+// GraphPage router: capability graph (candidate) vs skill graph
 export default function GraphPage() {
   const capabilityGraph = useSessionStore(s => s.session?.capabilityGraph)
   return capabilityGraph
@@ -167,7 +167,7 @@ function TalentGraphView() {
         <div className="p-4 border-b border-gray-800">
           <h2 className="text-white font-semibold mb-1">Talent Graph</h2>
           <p className="text-gray-500 text-xs">
-            {graph.nodes.length} nodes 蝜?{graph.edges.length} edges 蝜?{graph.superNodes.length} super node(s)
+            {graph.nodes.length} nodes - {graph.edges.length} edges - {graph.superNodes.length} super node(s)
           </p>
         </div>
 
@@ -205,8 +205,8 @@ function TalentGraphView() {
         <div className="p-4 border-b border-gray-800">
           <p className="text-xs text-gray-500 uppercase tracking-widest mb-2">Confidence</p>
           {[
-            { color: 'bg-emerald-500', label: '80??00% Strong' },
-            { color: 'bg-amber-500', label: '60??9% Moderate' },
+            { color: 'bg-emerald-500', label: '80-100% Strong' },
+            { color: 'bg-amber-500', label: '60-79% Moderate' },
             { color: 'bg-red-500', label: 'Below 60% Weak' },
           ].map(({ color, label }) => (
             <div key={label} className="flex items-center gap-2 mb-1.5">
@@ -224,7 +224,7 @@ function TalentGraphView() {
               <p className="text-xs text-amber-400 uppercase tracking-widest">Missing Evidence</p>
             </div>
             {profile.missingInfo.map(m => (
-              <p key={m} className="text-gray-400 text-xs mb-1">蝜?{m}</p>
+              <p key={m} className="text-gray-400 text-xs mb-1">- {sanitizeGraphText(m)}</p>
             ))}
           </div>
         )}
@@ -270,7 +270,7 @@ function TalentGraphView() {
   )
 }
 
-// ?????? Candidate Capability Graph view ????????????????????????????????????????????????????????????????
+// Candidate Capability Graph view
 const CAP_TYPE_STYLE: Record<CapabilityNodeType, { label: string; border: string; text: string; dot: string; edge: string }> = {
   target_direction: { label: 'Target', border: 'border-amber-500', text: 'text-amber-300', dot: 'bg-amber-500', edge: '#f59e0b' },
   experience: { label: 'Experience', border: 'border-blue-500', text: 'text-blue-300', dot: 'bg-blue-500', edge: '#3b82f6' },
@@ -360,11 +360,42 @@ function CapabilityNodeCard({ data }: { data: Record<string, unknown> }) {
   )
 }
 
+function sanitizeGraphText(text: string): string {
+  return text
+    .replace(/^\?{2,}/, '')
+    .replace(/\?{2,}/g, '')
+    .replace(/[\u0080-\u009f]/g, '')
+    .replace(/[\ue000-\uf8ff]/g, '')
+    .trim()
+}
+
 const capNodeTypes = { capabilityNode: CapabilityNodeCard }
 
-function CapabilityGraphView({ graph }: { graph: CandidateCapabilityGraph }) {
-  const domain = useSessionStore(s => s.session?.candidateDomain)
-  const target = useSessionStore(s => s.session?.targetDirection)
+export function CapabilityGraphView({
+  graph,
+  title = 'Capability Graph',
+  ownerLabel = 'Candidate',
+  domain,
+  target,
+  backLabel = 'Back to Conversation',
+  footerText = 'Keep chatting to refine the graph',
+  heightClass = 'h-[calc(100vh-57px)]',
+  onBack = () => window.dispatchEvent(new CustomEvent('goto', { detail: 'chat' })),
+}: {
+  graph: CandidateCapabilityGraph
+  title?: string
+  ownerLabel?: string
+  domain?: string | null
+  target?: string | null
+  backLabel?: string
+  footerText?: string
+  heightClass?: string
+  onBack?: () => void
+}) {
+  const sessionDomain = useSessionStore(s => s.session?.candidateDomain)
+  const sessionTarget = useSessionStore(s => s.session?.targetDirection)
+  const displayDomain = domain ?? sessionDomain
+  const displayTarget = target ?? sessionTarget
 
   const [nodes, setNodes, onNodesChange] = useNodesState(buildCapFlowNodes(graph))
   const [edges, setEdges, onEdgesChange] = useEdgesState(buildCapFlowEdges(graph))
@@ -377,22 +408,22 @@ function CapabilityGraphView({ graph }: { graph: CandidateCapabilityGraph }) {
   const usedTypes = CAP_TYPE_ORDER.filter(t => graph.nodes.some(n => n.type === t))
 
   return (
-    <div className="flex h-[calc(100vh-57px)]">
+    <div className={`flex ${heightClass}`}>
       {/* Sidebar */}
       <div className="w-72 border-r border-gray-800 flex flex-col overflow-y-auto">
         <div className="p-4 border-b border-gray-800">
-          <h2 className="text-white font-semibold mb-1">Capability Graph</h2>
+          <h2 className="text-white font-semibold mb-1">{title}</h2>
           <p className="text-gray-500 text-xs">
-            {graph.nodes.length} nodes 蝜?{graph.edges.length} edges 蝜?{Math.round(graph.confidence * 100)}% confidence
+            {graph.nodes.length} nodes - {graph.edges.length} edges - {Math.round(graph.confidence * 100)}% confidence
           </p>
         </div>
 
         <div className="p-4 border-b border-gray-800">
-          <p className="text-xs text-gray-500 uppercase tracking-widest mb-2">Candidate</p>
+          <p className="text-xs text-gray-500 uppercase tracking-widest mb-2">{ownerLabel}</p>
           <p className="text-gray-500 text-xs">Domain</p>
-          <p className="text-white text-sm font-medium capitalize mb-2">{domain ?? '-'}</p>
+          <p className="text-white text-sm font-medium capitalize mb-2">{displayDomain ?? '-'}</p>
           <p className="text-gray-500 text-xs">Target direction</p>
-          <p className="text-white text-sm font-medium">{target ?? '-'}</p>
+          <p className="text-white text-sm font-medium">{displayTarget ?? '-'}</p>
         </div>
 
         {/* Node type legend */}
@@ -414,7 +445,7 @@ function CapabilityGraphView({ graph }: { graph: CandidateCapabilityGraph }) {
               <p className="text-xs text-amber-400 uppercase tracking-widest">Missing Evidence</p>
             </div>
             {graph.missingEvidence.map(m => (
-              <p key={m} className="text-gray-400 text-xs mb-1">蝜?{m}</p>
+              <p key={m} className="text-gray-400 text-xs mb-1">- {sanitizeGraphText(m)}</p>
             ))}
           </div>
         )}
@@ -422,13 +453,13 @@ function CapabilityGraphView({ graph }: { graph: CandidateCapabilityGraph }) {
         {/* Back to chat */}
         <div className="p-4 mt-auto">
           <button
-            onClick={() => window.dispatchEvent(new CustomEvent('goto', { detail: 'chat' }))}
+            onClick={onBack}
             className="w-full bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-4 py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2"
           >
             <MessageSquare size={14} />
-            Back to Conversation
+            {backLabel}
           </button>
-          <p className="text-gray-600 text-xs text-center mt-2">Keep chatting to refine the graph</p>
+          <p className="text-gray-600 text-xs text-center mt-2">{footerText}</p>
         </div>
       </div>
 

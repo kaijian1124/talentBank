@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, Briefcase, Building2, CheckCircle2, Loader2, LogOut, MessageCircle, Search, Send, X } from 'lucide-react'
-import type { AccountUser, JobPosting, MessageThread, ThreadMessage } from '../types'
-import { applyToJob, getCandidateJobs } from '../services/jobService'
+﻿import { useEffect, useMemo, useState } from 'react'
+import { ArrowRight, Briefcase, Building2, CheckCircle2, Loader2, LogOut, MessageCircle, Network, Search, Send, X } from 'lucide-react'
+import type { AccountUser, CandidateCapabilityGraph, JobPosting, MessageThread, ThreadMessage } from '../types'
+import type { MatchResult as HybridMatchResult } from '../lib/matching'
+import { candidateProfileFromAccount, jobProfileFromPosting, matchCandidateToJob } from '../lib/matching'
+import { applyToJob, getCandidateJobs, notifyCompanyOfRecommendedCandidate } from '../services/jobService'
 import { getThreadMessages, getThreadsForUser, sendThreadMessage, subscribeToThreadMessages } from '../services/messageService'
+import { buildCompanyRoleGraphFromJob } from '../services/companyGraph'
+import { CapabilityGraphView } from './GraphPage'
 
 export default function CandidateDashboard({
   user,
@@ -14,6 +18,7 @@ export default function CandidateDashboard({
   onLogout: () => void
 }) {
   const [jobs, setJobs] = useState<JobPosting[]>([])
+  const [jobMatches, setJobMatches] = useState<Record<string, HybridMatchResult>>({})
   const [threads, setThreads] = useState<MessageThread[]>([])
   const [keyword, setKeyword] = useState('')
   const [isLoading, setIsLoading] = useState(true)
@@ -23,15 +28,31 @@ export default function CandidateDashboard({
   const [threadMessages, setThreadMessages] = useState<ThreadMessage[]>([])
   const [reply, setReply] = useState('')
   const [isSending, setIsSending] = useState(false)
+  const [activeGraph, setActiveGraph] = useState<{ graph: CandidateCapabilityGraph; title: string } | null>(null)
 
   useEffect(() => {
     let ignore = false
     setIsLoading(true)
     Promise.all([getCandidateJobs(keyword), getThreadsForUser(user)])
-      .then(([jobResult, threadResult]) => {
+      .then(async ([jobResult, threadResult]) => {
+        const candidateProfile = candidateProfileFromAccount(user)
+        const matchPairs = await Promise.all(jobResult.map(async (job) => {
+          const match = await matchCandidateToJob(candidateProfile, jobProfileFromPosting(job))
+          return [job.id, match] as const
+        }))
         if (ignore) return
-        setJobs(jobResult)
+        const matchMap = Object.fromEntries(matchPairs)
+        const scoredJobs = jobResult
+          .map((job) => ({ ...job, fitScore: matchMap[job.id]?.finalScore ?? job.fitScore }))
+          .sort((a, b) => b.fitScore - a.fitScore)
+        setJobMatches(matchMap)
+        setJobs(scoredJobs)
         setThreads(threadResult)
+        void Promise.all(
+          scoredJobs
+            .filter((job) => (matchMap[job.id]?.finalScore ?? 0) >= 80)
+            .map((job) => notifyCompanyOfRecommendedCandidate(job, user, matchMap[job.id]))
+        ).catch((error) => console.error('Failed to create company recommendation notification', error))
       })
       .catch((error) => {
         if (!ignore) setMessage(error instanceof Error ? error.message : 'Failed to load dashboard.')
@@ -141,7 +162,7 @@ export default function CandidateDashboard({
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
           <SummaryCard icon={<Briefcase size={16} />} label="Open roles" value={String(totalJobs)} />
-          <SummaryCard icon={<CheckCircle2 size={16} />} label="Default fit score" value="80%" />
+          <SummaryCard icon={<CheckCircle2 size={16} />} label="Hybrid matching" value={user.candidateGraph ? 'Active' : 'Limited'} />
           <SummaryCard icon={<Building2 size={16} />} label="Application status" value={`${appliedJobIds.size} sent`} />
           <SummaryCard icon={<MessageCircle size={16} />} label="Messages" value={String(threads.length)} />
         </div>
@@ -155,7 +176,7 @@ export default function CandidateDashboard({
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
               <div>
                 <h2 className="text-white font-semibold">Recommended jobs</h2>
-                <p className="text-gray-500 text-sm">Sorted by fit score. Fit calculation can replace the placeholder later.</p>
+                <p className="text-gray-500 text-sm">Sorted by hybrid vector + skill graph score.</p>
               </div>
               <div className="relative w-full md:w-80">
                 <Search size={15} className="absolute left-3 top-3 text-gray-500" />
@@ -177,7 +198,9 @@ export default function CandidateDashboard({
                     key={job.id}
                     job={job}
                     isApplied={appliedJobIds.has(job.id)}
+                    match={jobMatches[job.id]}
                     onApply={() => handleApply(job)}
+                    onViewGraph={() => setActiveGraph({ graph: buildCompanyRoleGraphFromJob(job), title: job.title })}
                   />
                 ))}
                 {jobs.length === 0 && (
@@ -222,6 +245,13 @@ export default function CandidateDashboard({
           </section>
         </div>
       </section>
+      {activeGraph && (
+        <RoleGraphModal
+          graph={activeGraph.graph}
+          title={activeGraph.title}
+          onClose={() => setActiveGraph(null)}
+        />
+      )}
       {activeThread && (
         <MessageModal
           user={user}
@@ -235,6 +265,34 @@ export default function CandidateDashboard({
         />
       )}
     </main>
+  )
+}
+
+function RoleGraphModal({
+  graph,
+  title,
+  onClose,
+}: {
+  graph: CandidateCapabilityGraph
+  title: string
+  onClose: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center px-4 py-6">
+      <div className="w-full max-w-6xl bg-gray-950 border border-gray-800 rounded-lg shadow-xl overflow-hidden">
+        <CapabilityGraphView
+          graph={graph}
+          title="Role Requirement Graph"
+          ownerLabel="Company Role"
+          domain="Hiring"
+          target={title}
+          backLabel="Back to Jobs"
+          footerText="Generated from this job posting"
+          heightClass="h-[82vh]"
+          onBack={onClose}
+        />
+      </div>
+    </div>
   )
 }
 
@@ -316,7 +374,56 @@ function MessageModal({
   )
 }
 
-function JobCard({ job, isApplied, onApply }: { job: JobPosting; isApplied: boolean; onApply: () => void }) {
+function MatchInsight({ match }: { match: HybridMatchResult }) {
+  const missing = match.missingRequiredSkills.slice(0, 3)
+  const recommended = match.recommendedNextSkills.filter((skill) => !missing.includes(skill)).slice(0, 3)
+  const related = match.relatedSkillMatches.slice(0, 2).map((item) => `${item.candidateSkill} -> ${item.jobSkill}`)
+
+  let message = 'Strong skill match. Add more project evidence to make your profile stronger.'
+  let tone = 'text-emerald-200'
+
+  if (missing.length > 0) {
+    message = `Need to learn ${missing.join(', ')}`
+    tone = 'text-amber-200'
+  } else if (recommended.length > 0) {
+    message = `Recommended next skills: ${recommended.join(', ')}`
+    tone = 'text-amber-200'
+  } else if (related.length > 0) {
+    message = `Related skill path: ${related.join('; ')}`
+    tone = 'text-sky-200'
+  }
+
+  return (
+    <div className="mb-3 rounded-lg border border-gray-800 bg-gray-950 px-3 py-2">
+      <p className={`text-xs leading-relaxed ${tone}`}>{message}</p>
+      {match.explanation.length > 0 && (
+        <p className="text-xs text-gray-500 mt-1 line-clamp-2">{sanitizeDashboardText(match.explanation[0])}</p>
+      )}
+    </div>
+  )
+}
+
+function sanitizeDashboardText(text: string): string {
+  return text
+    .replace(/\?{2,}/g, '')
+    .replace(/[\u0080-\u009f]/g, '')
+    .replace(/[\ue000-\uf8ff]/g, '')
+    .trim()
+}
+
+function JobCard({
+  job,
+  match,
+  isApplied,
+  onApply,
+  onViewGraph,
+}: {
+  job: JobPosting
+  match?: HybridMatchResult
+  isApplied: boolean
+  onApply: () => void
+  onViewGraph: () => void
+}) {
   const salary = job.salaryMin && job.salaryMax
     ? `${job.salaryCurrency} ${job.salaryMin.toLocaleString()} - ${job.salaryMax.toLocaleString()}`
     : 'Salary not disclosed'
@@ -333,6 +440,7 @@ function JobCard({ job, isApplied, onApply }: { job: JobPosting; isApplied: bool
           </div>
           <p className="text-violet-300 text-sm font-medium mb-2">{job.companyName}</p>
           <p className="text-gray-300 text-sm leading-relaxed mb-3">{job.description}</p>
+          {match && <MatchInsight match={match} />}
           {job.companyIntro && (
             <p className="text-gray-500 text-sm leading-relaxed mb-3">{job.companyIntro}</p>
           )}
@@ -342,13 +450,22 @@ function JobCard({ job, isApplied, onApply }: { job: JobPosting; isApplied: bool
             {job.employmentType && <span className="bg-gray-950 border border-gray-800 rounded-full px-2 py-1">{job.employmentType}</span>}
           </div>
         </div>
-        <button
-          onClick={onApply}
-          disabled={isApplied}
-          className="lg:w-44 bg-violet-600 hover:bg-violet-500 disabled:bg-gray-800 disabled:text-gray-500 text-white text-sm font-semibold px-4 py-2.5 rounded-lg transition-colors"
-        >
-          {isApplied ? 'Applied' : 'Apply'}
-        </button>
+        <div className="lg:w-44 flex flex-col gap-2">
+          <button
+            onClick={onApply}
+            disabled={isApplied}
+            className="bg-violet-600 hover:bg-violet-500 disabled:bg-gray-800 disabled:text-gray-500 text-white text-sm font-semibold px-4 py-2.5 rounded-lg transition-colors"
+          >
+            {isApplied ? 'Applied' : 'Apply'}
+          </button>
+          <button
+            onClick={onViewGraph}
+            className="border border-gray-700 hover:border-violet-600 text-gray-300 hover:text-white text-sm font-semibold px-4 py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2"
+          >
+            <Network size={14} />
+            View graph
+          </button>
+        </div>
       </div>
     </article>
   )

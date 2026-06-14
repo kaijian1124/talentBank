@@ -1,7 +1,7 @@
 ﻿import type { UserType, CandidateProfile, CompanyProfile, JobPosting, SkillNode } from '../types'
 import { demoCandidateProfile, demoCompanyProfile } from './mockData'
 
-// ??? Role Classifier ???????????????????????????????????????????????
+// Role classifier
 export function classifyUserType(text: string): UserType {
   const t = text.toLowerCase()
   if (t.match(/job|hire me|candidate|looking for work|apply|intern|graduate|student|skill|cv|resume|career/)) return 'candidate'
@@ -10,7 +10,7 @@ export function classifyUserType(text: string): UserType {
   return 'unknown'
 }
 
-// ??? Intake question banks ?????????????????????????????????????????
+// Intake question banks
 const candidateQuestions = [
   "What is your current career goal? (e.g. backend engineer, AI developer, data scientist)",
   "What roles are you targeting right now?",
@@ -57,7 +57,7 @@ export function getIntakeLength(userType: UserType): number {
   return 0
 }
 
-// ??? Skill extractor ???????????????????????????????????????????????
+// Skill extractor
 export function extractSkillsFromText(text: string): string[] {
   const known = [
     'java', 'python', 'javascript', 'typescript', 'react', 'react native',
@@ -69,7 +69,7 @@ export function extractSkillsFromText(text: string): string[] {
   return known.filter(s => lower.includes(s))
 }
 
-// ??? Verification questions ????????????????????????????????????????
+// Verification questions
 const verificationQuestions: Record<string, string[]> = {
   java: [
     "In a Java backend project, what is the purpose of separating Controller, Service, and Repository layers?",
@@ -101,7 +101,7 @@ export function getVerificationQuestion(skillName: string): string {
   return questions[Math.floor(Math.random() * questions.length)]
 }
 
-// ??? Verification evaluator ????????????????????????????????????????
+// Verification evaluator
 export function evaluateVerificationAnswer(
   skillName: string,
   answer: string
@@ -119,7 +119,7 @@ export function evaluateVerificationAnswer(
     evidenceText = 'Very brief answer provided, insufficient to verify claim.'
   } else if (lower.match(/don't know|not sure|no idea|unsure/)) {
     confidence = 0.30
-    feedback = "No problem ??I've noted this as self-claimed. We can revisit it later."
+    feedback = "No problem. I've noted this as self-claimed. We can revisit it later."
     evidenceText = 'Candidate was uncertain when asked a verification question.'
   } else if (wordCount >= 5 && wordCount < 20) {
     confidence = 0.55
@@ -127,7 +127,7 @@ export function evaluateVerificationAnswer(
     evidenceText = `Candidate gave a basic correct answer about ${skillName}.`
   } else if (lower.match(/because|example|when|project|used|implemented|worked/)) {
     confidence = 0.72
-    feedback = "Great ??you gave a practical answer with context. I've marked this as conversation-verified."
+    feedback = "Great. You gave a practical answer with context. I've marked this as conversation-verified."
     evidenceText = `Candidate explained ${skillName} with practical context and project reference.`
   } else {
     confidence = 0.62
@@ -138,7 +138,7 @@ export function evaluateVerificationAnswer(
   return { confidence, feedback, evidenceText }
 }
 
-// ??? Skill node generator ??????????????????????????????????????????
+// Skill node generator
 export function generateSkillNode(
   skillName: string,
   confidence: number,
@@ -170,7 +170,7 @@ export function generateSkillNode(
   }
 }
 
-// ??? Profile extractor (mock) ??????????????????????????????????????
+// Profile extractor (mock)
 export function extractCandidateProfile(messages: string[]): CandidateProfile {
   const fullText = messages.join(' ').toLowerCase()
   const skills = extractSkillsFromText(fullText)
@@ -351,7 +351,7 @@ function cleanShortText(text: string): string {
   return text.trim().replace(/\\s+/g, ' ').replace(/[.?!,;:]+$/, '')
 }
 
-// ??? Confirmation summary ??????????????????????????????????????????
+// Confirmation summary
 export function generateConfirmationSummary(profile: CandidateProfile): string {
   const skills = profile.claimedSkills.map(s => s.skillName).join(', ')
   const projects = profile.projects.map(p => p.name).join(', ')
@@ -359,15 +359,15 @@ export function generateConfirmationSummary(profile: CandidateProfile): string {
 
   return `Here is what I understood about you:
 
-?? **Target role:** ${profile.careerGoal ?? 'Not specified'}
-?? **Skills mentioned:** ${skills || 'None detected yet'}
-?? **Projects:** ${projects || 'None mentioned'}
-?? **Missing evidence:** ${missing || 'None identified'}
+- **Target role:** ${profile.careerGoal ?? 'Not specified'}
+- **Skills mentioned:** ${skills || 'None detected yet'}
+- **Projects:** ${projects || 'None mentioned'}
+- **Missing evidence:** ${missing || 'None identified'}
 
 Is this correct? You can confirm, correct anything, or add missing details.`
 }
 
-// ??? Chat response generator ???????????????????????????????????????
+// Chat response generator
 export function generateChatResponse(
   userType: UserType,
   step: number,
@@ -383,7 +383,7 @@ export function generateChatResponse(
   const nextQ = getIntakeQuestion(userType, step)
 
   if (!nextQ) {
-    return `Thanks ??I have gathered enough information. Let me now build your Talent Graph. Click **"Generate Graph"** when you're ready.`
+    return `Thanks. I have gathered enough information. Let me now build your Talent Graph. Click **"Generate Graph"** when you're ready.`
   }
 
   return nextQ
