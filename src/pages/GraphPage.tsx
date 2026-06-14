@@ -275,10 +275,12 @@ const CAP_TYPE_STYLE: Record<CapabilityNodeType, { label: string; border: string
   trait: { label: 'Trait', border: 'border-teal-500', text: 'text-teal-300', dot: 'bg-teal-500', edge: '#14b8a6' },
   context: { label: 'Context', border: 'border-gray-500', text: 'text-gray-300', dot: 'bg-gray-500', edge: '#6b7280' },
   evidence_gap: { label: 'Evidence Gap', border: 'border-red-500', text: 'text-red-300', dot: 'bg-red-500', edge: '#dc2626' },
+  preference: { label: 'Preference', border: 'border-fuchsia-500', text: 'text-fuchsia-300', dot: 'bg-fuchsia-500', edge: '#d946ef' },
+  credential: { label: 'Credential', border: 'border-sky-500', text: 'text-sky-300', dot: 'bg-sky-500', edge: '#0ea5e9' },
 }
 
 const CAP_TYPE_ORDER: CapabilityNodeType[] = [
-  'target_direction', 'experience', 'capability', 'outcome', 'trait', 'context', 'evidence_gap',
+  'target_direction', 'preference', 'credential', 'experience', 'capability', 'outcome', 'trait', 'context', 'evidence_gap',
 ]
 
 function buildCapFlowNodes(graph: CandidateCapabilityGraph): Node[] {

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useSessionStore } from '../store/sessionStore'
-import { Send, Loader2, CheckCircle2, Circle, Zap, Network, SkipForward } from 'lucide-react'
+import { Send, Loader2, CheckCircle2, Circle, Zap, Network, SkipForward, Check, ListChecks } from 'lucide-react'
 import {
   classifyUserType, getIntakeQuestion, getIntakeLength,
   extractCompanyProfile, generateChatResponse,
@@ -12,6 +12,7 @@ import {
   getNextQuestion, buildCapabilityGraph, mergeGraphDelta, preserveSelfClaimedSkills, toGraphSummary,
 } from '../services/candidateAnalysis'
 import type { CandidateProfile, ChatMessage, CompanyProfile, UserType } from '../types'
+import type { StructuredAnswer, StructuredQuestion } from '../types/llmContract'
 
 const MAX_CANDIDATE_INTAKE_ANSWERS = 5
 
@@ -31,6 +32,7 @@ export default function ChatPage({
     addMessage, setUserType, incrementStep, setLoading,
     setProfile, setGraph, setMatchResult,
     setCapabilityGraph, setCandidateMeta,
+    addStructuredAnswer, clearPendingQuestion,
   } = useSessionStore()
 
   const [input, setInput] = useState('')
@@ -58,16 +60,20 @@ export default function ChatPage({
       const res = await getNextQuestion({
         messages: priorMessages,
         latestUserMessage: text,
+        structuredAnswers: s.structuredAnswers,
+        phase: s.intakePhase,
         graphSummary: toGraphSummary(s.capabilityGraph),
         domain: s.candidateDomain ?? undefined,
         targetDirection: s.targetDirection ?? null,
       })
       const answerCount = countCandidateAnswers(priorMessages, text)
       const questionBudgetReached = answerCount >= MAX_CANDIDATE_INTAKE_ANSWERS
-      const shouldOfferBuild = (res.readyToBuild || questionBudgetReached) && !s.capabilityGraph
+      const hasStructured = !!res.structuredQuestion
+      const shouldOfferBuild =
+        (res.readyToBuild || questionBudgetReached) && !s.capabilityGraph && !hasStructured
       addMessage(
         'assistant',
-        questionBudgetReached && !s.capabilityGraph
+        !hasStructured && questionBudgetReached && !s.capabilityGraph
           ? [
               'We have enough for a first-pass capability graph within the 30-minute intake.',
               '',
@@ -86,10 +92,41 @@ export default function ChatPage({
       setCandidateMeta({
         domain: res.detectedDomain,
         targetDirection: res.targetDirection,
-        readyToBuild: res.readyToBuild || questionBudgetReached,
+        readyToBuild: (res.readyToBuild || questionBudgetReached) && !hasStructured,
+        phase: res.phase,
+        pendingQuestion: res.structuredQuestion,
       })
     } catch (e) {
       addMessage('assistant', `⚠️ I couldn't reach the analysis service. ${(e as Error).message}\n\nMake sure the API server is running (\`npm run dev\`) and your key is set in \`.env.local\`.`)
+    }
+  }
+
+  // Candidate submitted a structured (MCQ/checklist) answer; record + continue.
+  const handleStructuredSubmit = async (optionIds: string[], manualEntries: string[]) => {
+    const s = useSessionStore.getState().session
+    if (!s || isLoading) return
+    const q = s.pendingQuestion
+    if (!q) return
+    const selectedLabels = q.options.filter((o) => optionIds.includes(o.id)).map((o) => o.label)
+    const picks = [...selectedLabels, ...manualEntries]
+    if (picks.length === 0) return
+    const answer: StructuredAnswer = {
+      questionId: q.id,
+      phase: q.phase,
+      selectedOptionIds: optionIds,
+      selectedLabels,
+      manualEntries,
+    }
+    const priorMessages = s.messages
+    const summaryText = picks.join(', ')
+    addStructuredAnswer(answer)
+    clearPendingQuestion()
+    addMessage('user', summaryText)
+    setLoading(true)
+    try {
+      await handleCandidateTurn(summaryText, priorMessages)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -103,6 +140,8 @@ export default function ChatPage({
       const delta = await buildCapabilityGraph({
         messages: s.messages,
         latestUserMessage: lastUser,
+        structuredAnswers: s.structuredAnswers,
+        phase: s.intakePhase,
         graphSummary: toGraphSummary(s.capabilityGraph),
         domain: s.candidateDomain ?? undefined,
         targetDirection: s.targetDirection ?? null,
@@ -126,6 +165,7 @@ export default function ChatPage({
     setInput('')
     const priorMessages = session.messages
     addMessage('user', text)
+    if (session.pendingQuestion) clearPendingQuestion()
     setLoading(true)
 
     try {
@@ -343,6 +383,14 @@ export default function ChatPage({
           <div ref={bottomRef} />
         </div>
 
+        {session.pendingQuestion && (
+          <StructuredAnswerPanel
+            question={session.pendingQuestion}
+            disabled={isLoading}
+            onSubmit={handleStructuredSubmit}
+          />
+        )}
+
         {/* Input */}
         <div className="border-t border-gray-800 px-4 py-4">
           <div className="flex gap-3 items-end max-w-3xl mx-auto">
@@ -404,6 +452,102 @@ function MarkdownText({ text }: { text: string }) {
         )
       })}
     </>
+  )
+}
+
+function StructuredAnswerPanel({
+  question,
+  disabled,
+  onSubmit,
+}: {
+  question: StructuredQuestion
+  disabled: boolean
+  onSubmit: (optionIds: string[], manualEntries: string[]) => void
+}) {
+  const isMulti = question.format === 'multi_select'
+  const [selected, setSelected] = useState<string[]>([])
+  const [manual, setManual] = useState('')
+
+  useEffect(() => {
+    setSelected([])
+    setManual('')
+  }, [question.id])
+
+  const toggle = (id: string) => {
+    setSelected((prev) =>
+      isMulti
+        ? prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+        : prev.includes(id) ? [] : [id]
+    )
+  }
+
+  const groups = Array.from(new Set(question.options.map((o) => o.group ?? '')))
+  const manualEntries = manual.split(',').map((str) => str.trim()).filter(Boolean)
+  const canSubmit = !disabled && (selected.length > 0 || manualEntries.length > 0)
+
+  return (
+    <div className="border-t border-gray-800 px-4 py-4">
+      <div className="max-w-3xl mx-auto">
+        <p className="text-xs text-gray-500 mb-2">
+          {isMulti ? 'Select all that apply' : 'Choose one'}
+          {question.allowManualEntry ? ' — or add your own below' : ''}
+        </p>
+        <div className="flex flex-col gap-3">
+          {groups.map((group) => (
+            <div key={group || 'default'}>
+              {group && (
+                <p className="text-[11px] uppercase tracking-wider text-gray-600 mb-1.5">{group}</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {question.options
+                  .filter((o) => (o.group ?? '') === group)
+                  .map((o) => {
+                    const active = selected.includes(o.id)
+                    return (
+                      <button
+                        key={o.id}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => toggle(o.id)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border transition-colors disabled:opacity-50 ${
+                          active
+                            ? 'bg-violet-600 border-violet-500 text-white'
+                            : 'bg-gray-900 border-gray-700 text-gray-300 hover:border-violet-600'
+                        }`}
+                      >
+                        {active && <Check size={13} />}
+                        {o.label}
+                      </button>
+                    )
+                  })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {question.allowManualEntry && (
+          <input
+            value={manual}
+            onChange={(e) => setManual(e.target.value)}
+            disabled={disabled}
+            placeholder="Add your own (comma-separated)…"
+            className="mt-3 w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-violet-600"
+          />
+        )}
+
+        <div className="mt-3 flex justify-end">
+          <button
+            type="button"
+            onClick={() => onSubmit(selected, manualEntries)}
+            disabled={!canSubmit}
+            className="bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+          >
+            <ListChecks size={14} />
+            Submit
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

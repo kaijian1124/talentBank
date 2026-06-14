@@ -4,13 +4,14 @@ import type { Request, Response } from 'express'
 import { getOpenAIClient, OPENAI_MODEL } from '../openaiClient'
 import { buildGraphBuildInput, buildNextQuestionInput } from '../prompts'
 import { sanitizeGraphBuildResponse, validateTurnRequest } from '../validation'
+import { buildNextQuestionResponse } from '../structuredOptions'
 import {
   GRAPH_BUILD_JSON_SCHEMA,
   NEXT_QUESTION_JSON_SCHEMA,
 } from '../../src/types/llmContract'
 import type {
   GraphBuildResponse,
-  NextQuestionResponse,
+  NextQuestionLLMOutput,
 } from '../../src/types/llmContract'
 
 const NEXT_QUESTION_MAX_TOKENS = 400
@@ -61,15 +62,17 @@ candidateRouter.post('/next-question', async (req: Request, res: Response) => {
       }
     }
 
-    let final: NextQuestionResponse
+    let llmOutput: NextQuestionLLMOutput
     try {
-      final = JSON.parse(accumulated) as NextQuestionResponse
+      llmOutput = JSON.parse(accumulated) as NextQuestionLLMOutput
     } catch {
       send('error', { error: 'Failed to parse model output as JSON.' })
       res.end()
       return
     }
 
+    // Server fills structured-question options from the seed before sending.
+    const final = buildNextQuestionResponse(llmOutput, parsed.value)
     send('done', final)
     res.end()
   } catch (err) {

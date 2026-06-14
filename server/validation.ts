@@ -3,6 +3,8 @@ import type {
   CandidateTurnRequest,
   GraphBuildResponse,
   GraphSummaryItem,
+  IntakePhase,
+  StructuredAnswer,
 } from '../src/types/llmContract'
 import type { CapabilityEdge, CapabilityNode } from '../src/types'
 
@@ -28,10 +30,17 @@ export function validateTurnRequest(body: unknown): ValidationResult<CandidateTu
   if (b.graphSummary !== undefined && !Array.isArray(b.graphSummary)) {
     return { ok: false, error: 'graphSummary must be an array when provided.' }
   }
+  if (b.structuredAnswers !== undefined && !Array.isArray(b.structuredAnswers)) {
+    return { ok: false, error: 'structuredAnswers must be an array when provided.' }
+  }
 
   const value: CandidateTurnRequest = {
     messages: Array.isArray(b.messages) ? (b.messages as CandidateTurnRequest['messages']) : [],
     latestUserMessage: b.latestUserMessage,
+    structuredAnswers: Array.isArray(b.structuredAnswers)
+      ? (b.structuredAnswers as StructuredAnswer[])
+      : [],
+    phase: b.phase as IntakePhase | undefined,
     graphSummary: Array.isArray(b.graphSummary)
       ? (b.graphSummary as GraphSummaryItem[])
       : [],

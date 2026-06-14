@@ -113,6 +113,7 @@ export function preserveSelfClaimedSkills(
       label: item.label,
       domain: delta.domain,
       confidence: item.confidence,
+      proficiency: item.proficiency,
       evidenceLevel: item.evidenceLevel,
       description: item.description,
     })
@@ -208,8 +209,10 @@ function mergeNode(current: CapabilityNode, incoming: CapabilityNode): Capabilit
     id: current.id,
     label: current.label || incoming.label,
     confidence: smoothConfidence(current.confidence, incoming.confidence),
+    proficiency: smoothProficiency(current.proficiency, incoming.proficiency),
     evidenceLevel: strongerEvidence(current.evidenceLevel, incoming.evidenceLevel),
     description: incoming.description || current.description,
+    taxonomyId: incoming.taxonomyId ?? current.taxonomyId,
   })
 }
 
@@ -224,6 +227,27 @@ function smoothConfidence(current = 0, incoming = 0): number {
 
 function clampConfidence(value: number): number {
   return Math.max(0, Math.min(1, Number(value.toFixed(2))))
+}
+
+// Proficiency (mastery estimate) is tracked separately from confidence and
+// may move in either direction as more is learned, so it is not forced to be
+// monotonic. null means "not meaningful for this node type".
+function clampProficiency(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) return null
+  return Math.max(0, Math.min(1, Number(value.toFixed(2))))
+}
+
+function smoothProficiency(
+  current: number | null | undefined,
+  incoming: number | null | undefined
+): number | null {
+  const c = clampProficiency(current)
+  const i = clampProficiency(incoming)
+  if (i === null) return c
+  if (c === null) return i
+  const maxStep = 0.15
+  const diff = i - c
+  return clampProficiency(c + Math.max(-maxStep, Math.min(maxStep, diff)))
 }
 
 function strongerEvidence(
@@ -263,6 +287,7 @@ function limitGraphDeltaConfidence(delta: GraphBuildResponse): GraphBuildRespons
         claim.label,
         'capability'
       ),
+      proficiency: clampProficiency(claim.proficiency),
     })),
   }
 }
@@ -276,6 +301,7 @@ function applyConfidencePolicy(node: CapabilityNode): CapabilityNode {
       node.label,
       node.type
     ),
+    proficiency: clampProficiency(node.proficiency),
   }
 }
 
@@ -393,6 +419,7 @@ type ClaimedGraphItem = {
   label: string
   type: Extract<CapabilityNodeType, 'capability' | 'trait'>
   confidence: number
+  proficiency: number
   evidenceLevel: NonNullable<CapabilityNode['evidenceLevel']>
   description: string
 }
@@ -410,6 +437,7 @@ function extractSelfClaimedItems(messages: ChatMessage[]): ClaimedGraphItem[] {
         label: skill.label,
         type: 'capability',
         confidence: 0.35,
+        proficiency: 0.3,
         evidenceLevel: 'self_claimed',
         description: `Candidate listed ${skill.label} during the skill inventory.`,
       })
@@ -422,6 +450,7 @@ function extractSelfClaimedItems(messages: ChatMessage[]): ClaimedGraphItem[] {
         label: trait.label,
         type: 'trait',
         confidence: trait.confidence,
+        proficiency: trait.confidence,
         evidenceLevel: 'conversation_supported',
         description: `Inferred from how the candidate described obstacles, actions, or resolution.`,
       })

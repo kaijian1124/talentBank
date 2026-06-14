@@ -3,6 +3,8 @@ npm install
 npm run dev
 */
 
+import type { IntakePhase, StructuredAnswer, StructuredQuestion } from './llmContract'
+
 export type UserType = 'candidate' | 'company' | 'university' | 'unknown'
 
 export type EvidenceLevel =
@@ -165,7 +167,7 @@ export interface CandidateProfile {
   preferences: Record<string, string>
   missingInfo: string[]
   confidence: number
-  // Candidate capability graph backbone (Step 1) ??optional, additive.
+  // Candidate capability graph backbone (Step 1) - optional, additive.
   domain?: CandidateDomain
   targetDirection?: string
   capabilityClaims?: CapabilityClaim[]
@@ -247,6 +249,10 @@ export interface UserSession {
   candidateDomain: CandidateDomain | null
   targetDirection: string | null
   readyToBuild: boolean
+  // Phased structured intake state.
+  intakePhase: IntakePhase
+  structuredAnswers: StructuredAnswer[]
+  pendingQuestion: StructuredQuestion | null
 }
 
 export type IntakeProgress = {
@@ -257,28 +263,39 @@ export type IntakeProgress = {
   matchReady: boolean
 }
 
-// ?€?€?€ Candidate Capability Graph backbone (Step 1) ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+// === Candidate Capability Graph backbone ===
 // Cross-domain, candidate-only capability/experience model. Additive:
 // existing skill/project types above remain valid for current pages.
 
 export type CandidateDomain =
   | 'technology'
+  | 'engineering'
   | 'healthcare'
-  | 'creative'
+  | 'finance'
   | 'business'
+  | 'creative'
+  | 'media_communications'
   | 'education'
   | 'research'
   | 'operations'
+  | 'hospitality'
+  | 'public_sector'
+  | 'skilled_trades'
   | 'general'
 
 export type MeaningfulExperienceKind =
   | 'internship'
+  | 'capstone'
+  | 'coursework'
+  | 'competition'
   | 'placement'
   | 'portfolio'
   | 'assignment'
   | 'case_work'
   | 'customer_interaction'
   | 'leadership'
+  | 'club_leadership'
+  | 'part_time'
   | 'research'
   | 'volunteering'
   | 'other'
@@ -289,6 +306,7 @@ export interface CapabilityClaim {
   domain: CandidateDomain
   rawText: string
   confidence: number
+  proficiency?: number | null
   evidenceLevel: EvidenceLevel
   sourceMessageIds: string[]
 }
@@ -312,6 +330,8 @@ export type CapabilityNodeType =
   | 'target_direction'
   | 'evidence_gap'
   | 'trait'
+  | 'preference'
+  | 'credential'
 
 export interface CapabilityNode {
   id: string
@@ -319,7 +339,9 @@ export interface CapabilityNode {
   label: string
   domain?: CandidateDomain
   confidence: number
+  proficiency?: number | null
   evidenceLevel?: EvidenceLevel
+  taxonomyId?: string | null
   description?: string
 }
 
@@ -331,6 +353,9 @@ export type CapabilityEdgeType =
   | 'performed_in'
   | 'indicates'
   | 'needs_evidence'
+  | 'requires'
+  | 'part_of'
+  | 'prefers'
 
 export interface CapabilityEdge {
   id: string
