@@ -16,13 +16,12 @@ import { OPENAI_MODEL } from './openaiClient'
 
 const PORT = Number(process.env.PORT) || 8787
 
-const app = express()
+export const app = express()
 app.use(express.json({ limit: '1mb' }))
 
 // Lightweight request logging.
 app.use((req: Request, _res: Response, next: NextFunction) => {
   if (req.path.startsWith('/api')) {
-    // eslint-disable-next-line no-console
     console.log(`[api] ${req.method} ${req.path}`)
   }
   next()
@@ -41,20 +40,20 @@ app.use('/api/company', companyRouter)
 app.use('/api/matching', matchingRouter)
 
 // Central error handler.
-app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+  void next
   const message = err instanceof Error ? err.message : 'Internal server error'
-  // eslint-disable-next-line no-console
   console.error('[api] error:', message)
   if (!res.headersSent) {
     res.status(500).json({ error: message })
   }
 })
 
-app.listen(PORT, () => {
-  // eslint-disable-next-line no-console
-  console.log(`[api] candidate server listening on http://localhost:${PORT} (model: ${OPENAI_MODEL})`)
-  if (!process.env.OPENAI_API_KEY) {
-    // eslint-disable-next-line no-console
-    console.warn('[api] OPENAI_API_KEY not set; candidate endpoints will return an error until configured in .env.local')
-  }
-})
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`[api] candidate server listening on http://localhost:${PORT} (model: ${OPENAI_MODEL})`)
+    if (!process.env.OPENAI_API_KEY) {
+      console.warn('[api] OPENAI_API_KEY not set; candidate endpoints will return an error until configured in .env.local')
+    }
+  })
+}
