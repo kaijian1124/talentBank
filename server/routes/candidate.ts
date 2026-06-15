@@ -1,24 +1,35 @@
-// ─── Candidate capability endpoints ─────────────────────────────────
+// Candidate capability endpoints
 import { Router } from 'express'
 import type { Request, Response } from 'express'
 import { getOpenAIClient, OPENAI_MODEL } from '../openaiClient'
+
+function extractJson(text: string): string | null {
+  if (!text || !text.trim()) return null
+  const trimmed = text.trim()
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return trimmed
+  const codeBlock = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/)
+  if (codeBlock) return codeBlock[1].trim()
+  return null
+}
 import { buildGraphBuildInput, buildNextQuestionInput } from '../prompts'
 import { sanitizeGraphBuildResponse, validateTurnRequest } from '../validation'
+import { buildNextQuestionResponse } from '../structuredOptions'
 import {
   GRAPH_BUILD_JSON_SCHEMA,
   NEXT_QUESTION_JSON_SCHEMA,
 } from '../../src/types/llmContract'
 import type {
   GraphBuildResponse,
-  NextQuestionResponse,
+  NextQuestionLLMOutput,
 } from '../../src/types/llmContract'
 
 const NEXT_QUESTION_MAX_TOKENS = 400
 const GRAPH_BUILD_MAX_TOKENS = 2000
+const CAREER_MODULES_MAX_TOKENS = 900
 
 export const candidateRouter = Router()
 
-// ─── Hot path: streamed next question (SSE) ─────────────────────────
+// Hot path: streamed next question (SSE)
 candidateRouter.post('/next-question', async (req: Request, res: Response) => {
   const parsed = validateTurnRequest(req.body)
   if (!parsed.ok || !parsed.value) {
@@ -54,22 +65,33 @@ candidateRouter.post('/next-question', async (req: Request, res: Response) => {
     })
 
     let accumulated = ''
+    let sawDelta = false
     for await (const event of stream) {
       if (event.type === 'response.output_text.delta') {
+        sawDelta = true
         accumulated += event.delta
         send('delta', { text: event.delta })
+      } else if (!sawDelta) {
+        console.log('[api/candidate/next-question] stream event:', event.type, JSON.stringify(event).slice(0, 300))
       }
     }
 
-    let final: NextQuestionResponse
+    console.log('[api/candidate/next-question] accumulated length:', accumulated.length)
+    console.log('[api/candidate/next-question] accumulated preview:', accumulated.slice(0, 200))
+
+    let llmOutput: NextQuestionLLMOutput
     try {
-      final = JSON.parse(accumulated) as NextQuestionResponse
+      const jsonText = extractJson(accumulated) ?? accumulated
+      llmOutput = JSON.parse(jsonText) as NextQuestionLLMOutput
     } catch {
+      console.error('[api/candidate/next-question] JSON parse failed. Raw accumulated:', accumulated)
       send('error', { error: 'Failed to parse model output as JSON.' })
       res.end()
       return
     }
 
+    // Server fills structured-question options from the seed before sending.
+    const final = buildNextQuestionResponse(llmOutput, parsed.value)
     send('done', final)
     res.end()
   } catch (err) {
@@ -80,7 +102,7 @@ candidateRouter.post('/next-question', async (req: Request, res: Response) => {
   }
 })
 
-// ─── Cold path: build graph deltas (JSON) ───────────────────────────
+// Cold path: build graph deltas (JSON)
 candidateRouter.post('/build-graph', async (req: Request, res: Response) => {
   const parsed = validateTurnRequest(req.body)
   if (!parsed.ok || !parsed.value) {
@@ -104,10 +126,15 @@ candidateRouter.post('/build-graph', async (req: Request, res: Response) => {
       },
     })
 
+    console.log('[api/candidate/build-graph] output_text length:', response.output_text?.length ?? 0)
+    console.log('[api/candidate/build-graph] output_text preview:', response.output_text?.slice(0, 200) ?? 'undefined')
+
     let result: GraphBuildResponse
     try {
-      result = JSON.parse(response.output_text) as GraphBuildResponse
+      const jsonText = extractJson(response.output_text) ?? response.output_text
+      result = JSON.parse(jsonText) as GraphBuildResponse
     } catch {
+      console.error('[api/candidate/build-graph] JSON parse failed. Raw output_text:', response.output_text)
       res.status(502).json({ error: 'Failed to parse model output as JSON.' })
       return
     }
@@ -118,6 +145,96 @@ candidateRouter.post('/build-graph', async (req: Request, res: Response) => {
     )
 
     res.json({ ...clean, _meta: { droppedEdges } })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    const isConfig = message.includes('OPENAI_API_KEY')
+    res.status(isConfig ? 500 : 502).json({ error: message })
+  }
+})
+
+candidateRouter.post('/career-modules', async (req: Request, res: Response) => {
+  const body = req.body as {
+    candidate?: unknown
+    jobs?: unknown
+    fallback?: unknown
+  }
+
+  if (!body.candidate || !body.fallback) {
+    res.status(400).json({ error: 'candidate and fallback are required.' })
+    return
+  }
+
+  try {
+    const client = getOpenAIClient()
+    const response = await client.responses.create({
+      model: OPENAI_MODEL,
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You are TalentBank Career OS for candidates.',
+            'Return only valid JSON matching the requested shape.',
+            'Do not invent market salary data. Use the provided salary range only.',
+            'Do not estimate expectedSalary. Use candidate.expectedSalary from the input. If it is missing, return null.',
+            'Pay fit must evaluate candidate.expectedSalary against the provided salary range and evidence; return Unknown when expectedSalary or salary range is missing.',
+            'Keep all text concise, practical, and in English.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify(body),
+        },
+      ],
+      max_output_tokens: CAREER_MODULES_MAX_TOKENS,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'candidate_career_modules',
+          strict: true,
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['source', 'careerCoach', 'fairPay', 'lifeChapter'],
+            properties: {
+              source: { type: 'string', enum: ['llm'] },
+              careerCoach: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['title', 'nextActions', 'projectSuggestion', 'interviewStory'],
+                properties: {
+                  title: { type: 'string' },
+                  nextActions: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 4 },
+                  projectSuggestion: { type: 'string' },
+                  interviewStory: { type: 'string' },
+                },
+              },
+              fairPay: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['expectedSalary', 'payFit', 'negotiationNote'],
+                properties: {
+                  expectedSalary: { type: ['number', 'null'] },
+                  payFit: { type: 'string', enum: ['Good', 'Bad', 'Unknown'] },
+                  negotiationNote: { type: 'string' },
+                },
+              },
+              lifeChapter: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['chapter', 'priorities', 'matchingAdvice'],
+                properties: {
+                  chapter: { type: 'string' },
+                  priorities: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 4 },
+                  matchingAdvice: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    res.json(JSON.parse(response.output_text))
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     const isConfig = message.includes('OPENAI_API_KEY')

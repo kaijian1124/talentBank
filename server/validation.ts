@@ -2,9 +2,36 @@
 import type {
   CandidateTurnRequest,
   GraphBuildResponse,
+  GraphEdgeSummaryItem,
   GraphSummaryItem,
+  IntakePhase,
+  StructuredAnswer,
 } from '../src/types/llmContract'
 import type { CapabilityEdge, CapabilityNode } from '../src/types'
+
+const SOFT_SKILL_LABELS = new Set([
+  'communication',
+  'teamwork',
+  'problem solving',
+  'time management',
+  'adaptability',
+  'critical thinking',
+  'self learning',
+  'self-learning',
+  'attention to detail',
+  'leadership',
+  'persistence',
+])
+
+function isSoftSkillLabel(label: string): boolean {
+  return SOFT_SKILL_LABELS.has(label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim())
+}
+
+function normaliseNodeType(node: CapabilityNode): CapabilityNode {
+  return node.type === 'capability' && isSoftSkillLabel(node.label)
+    ? { ...node, type: 'trait' }
+    : node
+}
 
 export interface ValidationResult<T> {
   ok: boolean
@@ -28,12 +55,22 @@ export function validateTurnRequest(body: unknown): ValidationResult<CandidateTu
   if (b.graphSummary !== undefined && !Array.isArray(b.graphSummary)) {
     return { ok: false, error: 'graphSummary must be an array when provided.' }
   }
+  if (b.structuredAnswers !== undefined && !Array.isArray(b.structuredAnswers)) {
+    return { ok: false, error: 'structuredAnswers must be an array when provided.' }
+  }
 
   const value: CandidateTurnRequest = {
     messages: Array.isArray(b.messages) ? (b.messages as CandidateTurnRequest['messages']) : [],
     latestUserMessage: b.latestUserMessage,
+    structuredAnswers: Array.isArray(b.structuredAnswers)
+      ? (b.structuredAnswers as StructuredAnswer[])
+      : [],
+    phase: b.phase as IntakePhase | undefined,
     graphSummary: Array.isArray(b.graphSummary)
       ? (b.graphSummary as GraphSummaryItem[])
+      : [],
+    graphEdges: Array.isArray(b.graphEdges)
+      ? (b.graphEdges as GraphEdgeSummaryItem[])
       : [],
     domain: b.domain as CandidateTurnRequest['domain'],
     targetDirection: (b.targetDirection as string | null | undefined) ?? null,
@@ -81,7 +118,7 @@ export function validateGraphEdges(
 // reference their ids from being dropped during validation.
 export function synthesizeNodesFromClaims(resp: GraphBuildResponse): CapabilityNode[] {
   const byId = new Map<string, CapabilityNode>()
-  for (const n of resp.newNodes ?? []) byId.set(n.id, n)
+  for (const n of resp.newNodes ?? []) byId.set(n.id, normaliseNodeType(n))
 
   for (const c of resp.newCapabilities ?? []) {
     if (!byId.has(c.id)) {

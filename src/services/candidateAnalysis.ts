@@ -1,5 +1,5 @@
-// ─── Frontend client for the candidate capability endpoints ─────────
-// Same-origin calls (Vite proxies /api → local server). The OpenAI key
+// ??? Frontend client for the candidate capability endpoints ?????????
+// Same-origin calls (Vite proxies /api ??local server). The OpenAI key
 // is never exposed here. Wired into ChatPage (candidate flow) + GraphPage.
 
 import { v4 as uuidv4 } from 'uuid'
@@ -11,6 +11,7 @@ import type {
 } from '../types/llmContract'
 import type {
   CandidateCapabilityGraph,
+  CandidateDomain,
   CapabilityEdge,
   CapabilityNode,
   CapabilityNodeType,
@@ -19,7 +20,21 @@ import type {
 
 const API_BASE = '/api/candidate'
 
-// ─── Hot path: next question (consumes SSE stream) ──────────────────
+const SOFT_SKILL_LABELS = new Set([
+  'communication',
+  'teamwork',
+  'problem solving',
+  'time management',
+  'adaptability',
+  'critical thinking',
+  'self learning',
+  'self-learning',
+  'attention to detail',
+  'leadership',
+  'persistence',
+])
+
+// ??? Hot path: next question (consumes SSE stream) ??????????????????
 // onToken (optional) receives incremental raw JSON text deltas for
 // progress UIs. The resolved value is the fully parsed response.
 export async function getNextQuestion(
@@ -74,7 +89,7 @@ export async function getNextQuestion(
   return result
 }
 
-// ─── Cold path: build graph deltas ──────────────────────────────────
+// ??? Cold path: build graph deltas ??????????????????????????????????
 export async function buildCapabilityGraph(
   input: CandidateTurnRequest
 ): Promise<GraphBuildResponse> {
@@ -113,6 +128,7 @@ export function preserveSelfClaimedSkills(
       label: item.label,
       domain: delta.domain,
       confidence: item.confidence,
+      proficiency: item.proficiency,
       evidenceLevel: item.evidenceLevel,
       description: item.description,
     })
@@ -128,7 +144,7 @@ export function preserveSelfClaimedSkills(
   })
 }
 
-// ─── Pure helper: merge a build delta into an existing graph ────────
+// ??? Pure helper: merge a build delta into an existing graph ????????
 export function mergeGraphDelta(
   graph: CandidateCapabilityGraph | null,
   delta: GraphBuildResponse
@@ -154,7 +170,7 @@ export function mergeGraphDelta(
       : canonicalIdByMeaning.get(nodeMeaningKey(incoming))
     const id = existingId ?? incoming.id
     const current = nodeById.get(id)
-    const cappedIncoming = applyConfidencePolicy({ ...incoming, id })
+    const cappedIncoming = applyConfidencePolicy(normaliseNodeType({ ...incoming, id }))
     const merged = current ? mergeNode(current, cappedIncoming) : cappedIncoming
     nodeById.set(id, merged)
     canonicalIdByMeaning.set(nodeMeaningKey(merged), id)
@@ -184,13 +200,74 @@ export function mergeGraphDelta(
   }
 }
 
-// ─── Pure helper: compact summary to pass back into prompts ─────────
+// ??? Pure helper: compact summary to pass back into prompts ?????????
 export function toGraphSummary(graph: CandidateCapabilityGraph | null): GraphSummaryItem[] {
   if (!graph) return []
   return graph.nodes.map((n) => ({ id: n.id, label: n.label, type: n.type }))
 }
 
-// ─── internals ──────────────────────────────────────────────────────
+// Compact edge list so the model can see what is ALREADY connected (and what
+// is still siloed) and add links to existing nodes instead of duplicating them.
+export function toGraphEdgeSummary(
+  graph: CandidateCapabilityGraph | null
+): Array<{ from: string; to: string; type: string }> {
+  if (!graph) return []
+  return graph.edges.map((e) => ({ from: e.from, to: e.to, type: e.type }))
+}
+
+// Deterministic guarantee that the candidate's goal role/position is always a
+// node in the graph, and that loose capability/trait/credential/preference
+// nodes are wired toward it. The model sometimes omits the target_direction
+// node or leaves selected skills floating; this keeps the graph anchored and
+// connected regardless of model output.
+export function ensureTargetDirectionNode(
+  graph: CandidateCapabilityGraph,
+  targetDirection: string | null | undefined,
+  domain: CandidateDomain | null | undefined
+): CandidateCapabilityGraph {
+  const target = (targetDirection ?? '').trim()
+  if (!target) return graph
+
+  const nodes = [...graph.nodes]
+  const edges = [...graph.edges]
+
+  let targetNode = nodes.find((n) => n.type === 'target_direction')
+  if (!targetNode) {
+    targetNode = {
+      id: `target_${normaliseLabel(target)}`,
+      type: 'target_direction',
+      label: target,
+      domain: domain ?? undefined,
+      confidence: 0.5,
+      proficiency: null,
+      description: `Target role / position: ${target}.`,
+    }
+    nodes.push(targetNode)
+  }
+
+  const linkedToTarget = new Set<string>()
+  for (const e of edges) {
+    if (e.to === targetNode.id) linkedToTarget.add(e.from)
+    if (e.from === targetNode.id) linkedToTarget.add(e.to)
+  }
+  for (const n of nodes) {
+    if (n.id === targetNode.id || linkedToTarget.has(n.id)) continue
+    if (n.type !== 'capability' && n.type !== 'trait' && n.type !== 'credential' && n.type !== 'preference') {
+      continue
+    }
+    edges.push({
+      id: uuidv4(),
+      from: n.id,
+      to: targetNode.id,
+      type: n.type === 'preference' ? 'prefers' : 'transfers_to',
+      reason: `${n.label} contributes toward ${target}.`,
+    })
+  }
+
+  return { ...graph, nodes, edges }
+}
+
+// ??? internals ??????????????????????????????????????????????????????
 function parseSseFrame(frame: string): { event?: string; data?: string } {
   let event: string | undefined
   const dataLines: string[] = []
@@ -208,8 +285,10 @@ function mergeNode(current: CapabilityNode, incoming: CapabilityNode): Capabilit
     id: current.id,
     label: current.label || incoming.label,
     confidence: smoothConfidence(current.confidence, incoming.confidence),
+    proficiency: smoothProficiency(current.proficiency, incoming.proficiency),
     evidenceLevel: strongerEvidence(current.evidenceLevel, incoming.evidenceLevel),
     description: incoming.description || current.description,
+    taxonomyId: incoming.taxonomyId ?? current.taxonomyId,
   })
 }
 
@@ -226,6 +305,27 @@ function clampConfidence(value: number): number {
   return Math.max(0, Math.min(1, Number(value.toFixed(2))))
 }
 
+// Proficiency (mastery estimate) is tracked separately from confidence and
+// may move in either direction as more is learned, so it is not forced to be
+// monotonic. null means "not meaningful for this node type".
+function clampProficiency(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) return null
+  return Math.max(0, Math.min(1, Number(value.toFixed(2))))
+}
+
+function smoothProficiency(
+  current: number | null | undefined,
+  incoming: number | null | undefined
+): number | null {
+  const c = clampProficiency(current)
+  const i = clampProficiency(incoming)
+  if (i === null) return c
+  if (c === null) return i
+  const maxStep = 0.15
+  const diff = i - c
+  return clampProficiency(c + Math.max(-maxStep, Math.min(maxStep, diff)))
+}
+
 function strongerEvidence(
   current: CapabilityNode['evidenceLevel'],
   incoming: CapabilityNode['evidenceLevel']
@@ -240,6 +340,16 @@ function strongerEvidence(
     'externally_validated',
   ]
   return rank.indexOf(incoming) > rank.indexOf(current) ? incoming : current
+}
+
+function normaliseNodeType(node: CapabilityNode): CapabilityNode {
+  return node.type === 'capability' && isSoftSkillLabel(node.label)
+    ? { ...node, type: 'trait' }
+    : node
+}
+
+function isSoftSkillLabel(label: string): boolean {
+  return SOFT_SKILL_LABELS.has(label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim())
 }
 
 function nodeMeaningKey(node: CapabilityNode): string {
@@ -263,6 +373,7 @@ function limitGraphDeltaConfidence(delta: GraphBuildResponse): GraphBuildRespons
         claim.label,
         'capability'
       ),
+      proficiency: clampProficiency(claim.proficiency),
     })),
   }
 }
@@ -276,6 +387,7 @@ function applyConfidencePolicy(node: CapabilityNode): CapabilityNode {
       node.label,
       node.type
     ),
+    proficiency: clampProficiency(node.proficiency),
   }
 }
 
@@ -393,6 +505,7 @@ type ClaimedGraphItem = {
   label: string
   type: Extract<CapabilityNodeType, 'capability' | 'trait'>
   confidence: number
+  proficiency: number
   evidenceLevel: NonNullable<CapabilityNode['evidenceLevel']>
   description: string
 }
@@ -410,6 +523,7 @@ function extractSelfClaimedItems(messages: ChatMessage[]): ClaimedGraphItem[] {
         label: skill.label,
         type: 'capability',
         confidence: 0.35,
+        proficiency: 0.3,
         evidenceLevel: 'self_claimed',
         description: `Candidate listed ${skill.label} during the skill inventory.`,
       })
@@ -422,6 +536,7 @@ function extractSelfClaimedItems(messages: ChatMessage[]): ClaimedGraphItem[] {
         label: trait.label,
         type: 'trait',
         confidence: trait.confidence,
+        proficiency: trait.confidence,
         evidenceLevel: 'conversation_supported',
         description: `Inferred from how the candidate described obstacles, actions, or resolution.`,
       })

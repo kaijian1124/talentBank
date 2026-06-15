@@ -1,33 +1,114 @@
-create table if not exists public.profiles (
+﻿create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null,
   display_name text,
   role text check (role in ('candidate', 'company', 'university')),
-  intake_completed boolean not null default false,
-  candidate_domain text,
-  target_direction text,
-  candidate_graph jsonb,
-  company_profile jsonb,
   created_at timestamptz not null default now()
 );
 
 alter table public.profiles
-  add column if not exists intake_completed boolean not null default false;
-
-alter table public.profiles
-  add column if not exists candidate_domain text;
-
-alter table public.profiles
-  add column if not exists target_direction text;
-
-alter table public.profiles
-  add column if not exists candidate_graph jsonb;
-
-alter table public.profiles
-  add column if not exists company_profile jsonb;
-
-alter table public.profiles
   alter column role drop not null;
+
+
+
+create table if not exists public.candidate_profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  intake_completed boolean not null default false,
+  candidate_domain text,
+  target_direction text,
+  candidate_graph jsonb,
+  intake_session jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.company_profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  intake_completed boolean not null default false,
+  company_profile jsonb,
+  intake_session jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.university_profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  intake_completed boolean not null default false,
+  university_profile jsonb,
+  intake_session jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.company_profiles add column if not exists intake_session jsonb;
+alter table public.university_profiles add column if not exists intake_session jsonb;
+
+-- Migrate legacy role-specific columns out of public.profiles when they exist.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'candidate_graph'
+  ) then
+    insert into public.candidate_profiles (
+      user_id,
+      intake_completed,
+      candidate_domain,
+      target_direction,
+      candidate_graph,
+      intake_session
+    )
+    select
+      id,
+      coalesce(intake_completed, false),
+      candidate_domain,
+      target_direction,
+      candidate_graph,
+      intake_session
+    from public.profiles
+    where role = 'candidate'
+       or candidate_graph is not null
+       or intake_session is not null
+       or candidate_domain is not null
+       or target_direction is not null
+    on conflict (user_id) do update set
+      intake_completed = excluded.intake_completed,
+      candidate_domain = coalesce(excluded.candidate_domain, public.candidate_profiles.candidate_domain),
+      target_direction = coalesce(excluded.target_direction, public.candidate_profiles.target_direction),
+      candidate_graph = coalesce(excluded.candidate_graph, public.candidate_profiles.candidate_graph),
+      intake_session = coalesce(excluded.intake_session, public.candidate_profiles.intake_session),
+      updated_at = now();
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'company_profile'
+  ) then
+    insert into public.company_profiles (user_id, intake_completed, company_profile, intake_session)
+    select id, coalesce(intake_completed, false), company_profile, intake_session
+    from public.profiles
+    where role = 'company' or company_profile is not null
+    on conflict (user_id) do update set
+      intake_completed = excluded.intake_completed,
+      company_profile = coalesce(excluded.company_profile, public.company_profiles.company_profile),
+      intake_session = coalesce(excluded.intake_session, public.company_profiles.intake_session),
+      updated_at = now();
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'intake_session'
+  ) then
+    insert into public.university_profiles (user_id, intake_completed, intake_session)
+    select id, coalesce(intake_completed, false), intake_session
+    from public.profiles
+    where role = 'university' and intake_session is not null
+    on conflict (user_id) do update set
+      intake_completed = excluded.intake_completed,
+      intake_session = coalesce(excluded.intake_session, public.university_profiles.intake_session),
+      updated_at = now();
+  end if;
+end $$;
 
 create table if not exists public.job_postings (
   id uuid primary key default gen_random_uuid(),
@@ -167,6 +248,56 @@ create policy "profiles can update own profile"
   using (auth.uid() = id)
   with check (auth.uid() = id);
 
+
+
+drop policy if exists "candidate profiles can read own profile" on public.candidate_profiles;
+create policy "candidate profiles can read own profile"
+  on public.candidate_profiles for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "candidate profiles can upsert own profile" on public.candidate_profiles;
+create policy "candidate profiles can upsert own profile"
+  on public.candidate_profiles for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "candidate profiles can update own profile" on public.candidate_profiles;
+create policy "candidate profiles can update own profile"
+  on public.candidate_profiles for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "company profiles can read own profile" on public.company_profiles;
+create policy "company profiles can read own profile"
+  on public.company_profiles for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "company profiles can upsert own profile" on public.company_profiles;
+create policy "company profiles can upsert own profile"
+  on public.company_profiles for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "company profiles can update own profile" on public.company_profiles;
+create policy "company profiles can update own profile"
+  on public.company_profiles for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "university profiles can read own profile" on public.university_profiles;
+create policy "university profiles can read own profile"
+  on public.university_profiles for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "university profiles can upsert own profile" on public.university_profiles;
+create policy "university profiles can upsert own profile"
+  on public.university_profiles for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "university profiles can update own profile" on public.university_profiles;
+create policy "university profiles can update own profile"
+  on public.university_profiles for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
 drop policy if exists "open jobs are readable" on public.job_postings;
 create policy "open jobs are readable"
   on public.job_postings for select
@@ -296,13 +427,11 @@ security definer
 set search_path = public
 as $$
 begin
-  insert into public.profiles (id, email, display_name, role, intake_completed, candidate_graph)
+  insert into public.profiles (id, email, display_name, role)
   values (
     new.id,
     coalesce(new.email, ''),
     coalesce(new.raw_user_meta_data->>'display_name', split_part(coalesce(new.email, ''), '@', 1)),
-    null,
-    false,
     null
   )
   on conflict (id) do nothing;

@@ -1,3 +1,64 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+.talent-knowledge-flow {
+  background:
+    radial-gradient(circle at 42% 34%, rgba(185, 156, 255, 0.1), transparent 30%),
+    radial-gradient(circle at 74% 62%, rgba(139, 92, 246, 0.08), transparent 28%),
+    #17141d;
+}
+
+.talent-knowledge-flow .react-flow__pane {
+  cursor: grab;
+}
+
+.talent-knowledge-flow .react-flow__pane:active {
+  cursor: grabbing;
+}
+
+.talent-knowledge-flow .react-flow__edge-path {
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.45));
+}
+
+.talent-knowledge-flow .react-flow__edge-text {
+  opacity: 0.45;
+}
+
+.talent-knowledge-flow .react-flow__edge:hover .react-flow__edge-text {
+  opacity: 0.85;
+}
+
+.talent-knowledge-flow .react-flow__edge.animated path {
+  stroke-dasharray: 5;
+  animation-duration: 1.6s;
+}
+
+.talent-knowledge-flow .react-flow__node {
+  background: transparent;
+}
+
+.talent-knowledge-flow .react-flow__node.selected div:first-child,
+.talent-knowledge-flow .react-flow__node:focus div:first-child {
+  outline: none;
+}
+
+.talent-knowledge-flow .react-flow__nodesselection-rect,
+.talent-knowledge-flow .react-flow__selection {
+  background: rgba(185, 156, 255, 0.1);
+  border: 1px solid rgba(216, 200, 255, 0.36);
+}
+
+.knowledge-flow-minimap {
+  overflow: hidden;
+  border: 1px solid #3a304b;
+  border-radius: 8px;
+  background: rgba(33, 28, 43, 0.72) !important;
+  opacity: 0.58;
+  backdrop-filter: blur(10px);
+  transition: opacity 160ms ease;
+}
+
+.knowledge-flow-minimap:hover {
+  opacity: 0.95;
+}

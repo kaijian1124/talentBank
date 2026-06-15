@@ -1,17 +1,20 @@
-import { useState, useRef, useEffect } from 'react'
+﻿import { useState, useRef, useEffect } from 'react'
 import { useSessionStore } from '../store/sessionStore'
-import { Send, Loader2, CheckCircle2, Circle, Zap, Network, SkipForward } from 'lucide-react'
+import { Send, Loader2, CheckCircle2, Circle, Zap, Network, SkipForward, Check, ListChecks, Search } from 'lucide-react'
 import {
   classifyUserType, getIntakeQuestion, getIntakeLength,
-  extractCompanyProfile, generateChatResponse,
+  extractCompanyJobPosting, extractCompanyProfile, generateChatResponse,
 } from '../services/mockLlm'
 import { buildTalentGraph } from '../services/graphService'
 import { matchCandidateToCompany } from '../services/matchingService'
 import { demoCompanyProfile } from '../services/mockData'
+import { generateCompanyJobPosting } from '../services/companyAnalysis'
 import {
-  getNextQuestion, buildCapabilityGraph, mergeGraphDelta, preserveSelfClaimedSkills, toGraphSummary,
+  getNextQuestion, buildCapabilityGraph, mergeGraphDelta, preserveSelfClaimedSkills,
+  toGraphSummary, toGraphEdgeSummary, ensureTargetDirectionNode,
 } from '../services/candidateAnalysis'
-import type { CandidateProfile, ChatMessage, CompanyProfile, UserType } from '../types'
+import type { CandidateDomain, CandidateProfile, ChatMessage, CompanyProfile, JobPosting, UserType } from '../types'
+import type { StructuredAnswer, StructuredQuestion } from '../types/llmContract'
 
 const MAX_CANDIDATE_INTAKE_ANSWERS = 5
 
@@ -20,17 +23,23 @@ export default function ChatPage({
   onRoleSelected,
   onIntakeCompleted,
   onCompanyIntakeCompleted,
+  companyName,
 }: {
   onSkip?: () => void
-  onRoleSelected?: (role: Exclude<UserType, 'unknown'>) => void
+  onRoleSelected?: (role: Exclude<UserType, 'unknown'>) => void | Promise<void>
+  companyName?: string
   onIntakeCompleted?: (graph?: ReturnType<typeof mergeGraphDelta>) => void
-  onCompanyIntakeCompleted?: (profile: CompanyProfile) => void
+  onCompanyIntakeCompleted?: (
+    jobDraft: Omit<JobPosting, 'id' | 'companyId' | 'fitScore' | 'status' | 'createdAt'>,
+    profile: CompanyProfile
+  ) => void
 }) {
   const {
     session, progress, isLoading, isVerifying, verifyingSkill,
     addMessage, setUserType, incrementStep, setLoading,
-    setProfile, setGraph, setMatchResult,
+    setProfile, setMatchResult,
     setCapabilityGraph, setCandidateMeta,
+    addStructuredAnswer, clearPendingQuestion,
   } = useSessionStore()
 
   const [input, setInput] = useState('')
@@ -40,7 +49,7 @@ export default function ChatPage({
   useEffect(() => {
     if (!hasInitialized.current && session && session.messages.length === 0) {
         hasInitialized.current = true
-        addMessage('assistant', "Welcome to Talentbank 👋\n\nAre you here as a **Candidate**, **Company**, or **University**?\n\nFeel free to describe yourself naturally — I'll figure it out.")
+        addMessage('assistant', "Welcome to Talentbank.\n\nAre you here as a **Candidate**, **Company**, or **University**?\n\nFeel free to describe yourself naturally. I'll figure it out.")
     }
   }, [session, addMessage])
 
@@ -49,8 +58,7 @@ export default function ChatPage({
   }, [session?.messages])
 
   if (!session) return null
-
-  // ─── Candidate path (real LLM via local API) ──────────────────────
+  // Candidate path (real LLM via local API)
   const handleCandidateTurn = async (text: string, priorMessages: ChatMessage[]) => {
     const s = useSessionStore.getState().session
     if (!s) return
@@ -58,16 +66,20 @@ export default function ChatPage({
       const res = await getNextQuestion({
         messages: priorMessages,
         latestUserMessage: text,
+        structuredAnswers: s.structuredAnswers,
+        phase: s.intakePhase,
         graphSummary: toGraphSummary(s.capabilityGraph),
         domain: s.candidateDomain ?? undefined,
         targetDirection: s.targetDirection ?? null,
       })
       const answerCount = countCandidateAnswers(priorMessages, text)
       const questionBudgetReached = answerCount >= MAX_CANDIDATE_INTAKE_ANSWERS
-      const shouldOfferBuild = (res.readyToBuild || questionBudgetReached) && !s.capabilityGraph
+      const hasStructured = !!res.structuredQuestion
+      const shouldOfferBuild =
+        (res.readyToBuild || questionBudgetReached) && !s.capabilityGraph && !hasStructured
       addMessage(
         'assistant',
-        questionBudgetReached && !s.capabilityGraph
+        !hasStructured && questionBudgetReached && !s.capabilityGraph
           ? [
               'We have enough for a first-pass capability graph within the 30-minute intake.',
               '',
@@ -84,12 +96,60 @@ export default function ChatPage({
           : res.nextQuestion
       )
       setCandidateMeta({
-        domain: res.detectedDomain,
-        targetDirection: res.targetDirection,
-        readyToBuild: res.readyToBuild || questionBudgetReached,
+        domain: res.detectedDomain ?? s.candidateDomain,
+        // Don't let a null from the model erase the role/domain the candidate
+        // already chose - it must survive to the build-graph step.
+        targetDirection: res.targetDirection ?? s.targetDirection,
+        readyToBuild: (res.readyToBuild || questionBudgetReached) && !hasStructured,
+        phase: res.phase,
+        pendingQuestion: res.structuredQuestion,
       })
     } catch (e) {
-      addMessage('assistant', `⚠️ I couldn't reach the analysis service. ${(e as Error).message}\n\nMake sure the API server is running (\`npm run dev\`) and your key is set in \`.env.local\`.`)
+      addMessage('assistant', `I couldn't reach the analysis service. ${(e as Error).message}`)
+    }
+  }
+
+  // Candidate submitted a structured (MCQ/checklist) answer; record + continue.
+  const handleStructuredSubmit = async (optionIds: string[], manualEntries: string[]) => {
+    const s = useSessionStore.getState().session
+    if (!s || isLoading) return
+    const q = s.pendingQuestion
+    if (!q) return
+    const selectedLabels = q.options.filter((o) => optionIds.includes(o.id)).map((o) => o.label)
+    const picks = [...selectedLabels, ...manualEntries]
+    if (picks.length === 0) return
+    const answer: StructuredAnswer = {
+      questionId: q.id,
+      phase: q.phase,
+      selectedOptionIds: optionIds,
+      selectedLabels,
+      manualEntries,
+    }
+    const selectedDomain = resolveDomainSelection(q, answer)
+    const selectedRole = resolveRoleSelection(q, answer)
+    const priorMessages = s.messages
+    const summaryText = picks.join(', ')
+    addStructuredAnswer(answer)
+    clearPendingQuestion()
+    if (selectedDomain) {
+      // Lock the field deterministically so the role checklist is built for the
+      // right domain. A manually typed field stays null here and is mapped by
+      // the model on the next turn.
+      setCandidateMeta({ domain: selectedDomain, phase: 'anchor', pendingQuestion: null })
+    }
+    if (selectedRole) {
+      setCandidateMeta({
+        targetDirection: selectedRole,
+        phase: 'anchor',
+        pendingQuestion: null,
+      })
+    }
+    addMessage('user', summaryText)
+    setLoading(true)
+    try {
+      await handleCandidateTurn(summaryText, priorMessages)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -103,18 +163,40 @@ export default function ChatPage({
       const delta = await buildCapabilityGraph({
         messages: s.messages,
         latestUserMessage: lastUser,
+        structuredAnswers: s.structuredAnswers,
+        phase: s.intakePhase,
         graphSummary: toGraphSummary(s.capabilityGraph),
+        graphEdges: toGraphEdgeSummary(s.capabilityGraph),
         domain: s.candidateDomain ?? undefined,
         targetDirection: s.targetDirection ?? null,
       })
       const enrichedDelta = preserveSelfClaimedSkills(delta, s.messages)
-      const merged = mergeGraphDelta(s.capabilityGraph, enrichedDelta)
+      const merged = ensureTargetDirectionNode(
+        mergeGraphDelta(s.capabilityGraph, enrichedDelta),
+        s.targetDirection,
+        s.candidateDomain
+      )
+      const isFirstBuild = !s.capabilityGraph
       setCapabilityGraph(merged)
       await onIntakeCompleted?.(merged)
-      addMessage('assistant', `✅ Capability graph updated — **${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening your graph...`)
+      addMessage(
+        'assistant',
+        isFirstBuild
+          ? [
+              `Your initial capability graph is ready: **${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening it now.`,
+              '',
+              'This is a **first draft** - most skills are still self-claimed. Come back to this chat anytime to make it stronger and improve your job matches:',
+              '- Share a **real experience** (a project, internship, capstone, club, or part-time job) where you used one of these skills',
+              '- Tell me about an **obstacle** you hit and how you solved it',
+              '- Add **more skills** you have',
+              '',
+              'Just type your next message below whenever you are ready, then hit **Update Capability Graph** to refresh it.',
+            ].join('\n')
+          : `Capability graph updated: **${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening your graph...`
+      )
       window.dispatchEvent(new CustomEvent('goto', { detail: 'graph' }))
     } catch (e) {
-      addMessage('assistant', `⚠️ Build failed. ${(e as Error).message}`)
+      addMessage('assistant', `Build failed. ${(e as Error).message}`)
     } finally {
       setLoading(false)
     }
@@ -126,6 +208,7 @@ export default function ChatPage({
     setInput('')
     const priorMessages = session.messages
     addMessage('user', text)
+    if (session.pendingQuestion) clearPendingQuestion()
     setLoading(true)
 
     try {
@@ -138,18 +221,20 @@ export default function ChatPage({
           return
         }
         setUserType(detected)
-        onRoleSelected?.(detected)
+        await onRoleSelected?.(detected)
 
         if (detected === 'candidate') {
-          addMessage('assistant', "Got it — I'll set you up as a **Candidate**. I'll ask adaptive questions to turn your real experiences into evidence of capability.")
+          addMessage('assistant', "Got it. I'll set you up as a **Candidate**. I'll ask adaptive questions to turn your real experiences into evidence of capability.")
           await handleCandidateTurn(text, priorMessages)
           setLoading(false)
           return
         }
 
-        // Company / University use the existing demo intake flow.
         const firstQ = getIntakeQuestion(detected, 0)
-        addMessage('assistant', `Got it — I'll set you up as a **${capitalise(detected)}**.\n\n*(1/${getIntakeLength(detected)})* ${firstQ}`)
+        const intro = detected === 'company'
+          ? `Got it. I will use **${companyName || 'your account company name'}** as the company name and help you create a job post with AI.`
+          : `Got it. I'll set you up as a **${capitalise(detected)}**.`
+        addMessage('assistant', `${intro}\n\n${firstQ}`)
         setLoading(false)
         return
       }
@@ -161,58 +246,58 @@ export default function ChatPage({
         return
       }
 
-      // ===== Company / University demo flow (mock) =====
-      await delay(600)
+      // ===== Company / University intake flow =====
+      await delay(400)
 
-      const lower = text.toLowerCase()
-
-      // Generate graph trigger
-      if (lower.match(/generate graph|build graph|ready|show graph|yes.*graph/)) {
-        const msgs = session.messages.filter(m => m.role === 'user').map(m => m.content)
-        const profile = extractCompanyProfile(msgs)
-        setProfile(profile)
-        const graph = buildTalentGraph(profile as unknown as CandidateProfile, session.id)
-        setGraph(graph)
-        addMessage('assistant', "Your context has been captured. Graph generated!")
-        setLoading(false)
-        return
-      }
-
-      // Match trigger
-      if (lower.match(/match|compare|fit score|yes.*match|run match/)) {
-        const profile = session.structuredProfile as unknown as CandidateProfile
-        const graph = session.graph ?? buildTalentGraph(profile, session.id)
-        if (!session.graph) setGraph(graph)
-
-        const result = matchCandidateToCompany(graph, demoCompanyProfile)
-        setMatchResult(result)
-        addMessage('assistant', `Match complete! Fit score is **${result.fitScore}/100** (${result.fitLevel.replace('_', ' ')}). Navigating to your match result...`)
-        setLoading(false)
-        return
-      }
-
-      // Normal intake flow
       const total = getIntakeLength(session.userType)
+      const answeredCount = session.intakeStep + 1
       incrementStep()
-      const newStep = session.intakeStep + 1
-      const response = generateChatResponse(session.userType, newStep, text, false)
-      addMessage('assistant', response)
 
-      // Auto-extract profile near end of intake
-      if (newStep >= total - 1) {
-        const msgs = session.messages.filter(m => m.role === 'user').map(m => m.content)
-        if (session.userType === 'company') {
-          const profile = extractCompanyProfile([...msgs, text])
+      if (session.userType === 'company') {
+        const rawCompanyMessages = [...session.messages.filter(m => m.role === 'user').map(m => m.content), text]
+        const msgs = rawCompanyMessages.length > total ? rawCompanyMessages.slice(-total) : rawCompanyMessages
+        if (answeredCount >= total) {
+          const extractedProfile = extractCompanyProfile(msgs)
+          const profile = { ...extractedProfile, companyName: companyName || extractedProfile.companyName }
+          let jobDraft: Omit<JobPosting, 'id' | 'companyId' | 'fitScore' | 'status' | 'createdAt'>
+          try {
+            const companyMessages: ChatMessage[] = msgs.map((content, index) => ({
+              id: `company_answer_${index}`,
+              role: 'user',
+              content,
+              timestamp: Date.now() + index,
+            }))
+            jobDraft = await generateCompanyJobPosting(companyMessages, companyName || profile.companyName)
+          } catch {
+            jobDraft = extractCompanyJobPosting(msgs, companyName || profile.companyName)
+          }
           setProfile(profile)
-          addMessage('assistant', 'Thanks. I have enough to create your company dashboard and first job posting.')
-          await onCompanyIntakeCompleted?.(profile)
+          addMessage(
+            'assistant',
+            [
+              'Thanks. I have enough to create a polished job post from this intake.',
+              '',
+              `**Position:** ${jobDraft.title}`,
+              `**Company:** ${companyName || jobDraft.companyName}`,
+              jobDraft.location ? `**Location:** ${jobDraft.location}` : '',
+              jobDraft.employmentType ? `**Employment type:** ${jobDraft.employmentType}` : '',
+              '',
+              'I am saving it to your company dashboard now.',
+            ].filter(Boolean).join('\n')
+          )
+          await onCompanyIntakeCompleted?.(jobDraft, profile)
           setLoading(false)
           return
-        } else {
-          const profile = extractCompanyProfile([...msgs, text])
-          setProfile(profile)
         }
+
+        const nextQ = getIntakeQuestion('company', answeredCount)
+        addMessage('assistant', nextQ)
+        setLoading(false)
+        return
       }
+
+      const response = generateChatResponse(session.userType, answeredCount, text, false)
+      addMessage('assistant', response)
     } finally {
       setLoading(false)
     }
@@ -275,11 +360,11 @@ export default function ChatPage({
           <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 flex flex-col gap-2">
             <div>
               <p className="text-xs text-gray-500">Domain</p>
-              <p className="text-gray-200 text-sm font-medium capitalize">{session.candidateDomain ?? '—'}</p>
+              <p className="text-gray-200 text-sm font-medium capitalize">{session.candidateDomain ?? '-'}</p>
             </div>
             <div>
               <p className="text-xs text-gray-500">Target direction</p>
-              <p className="text-gray-200 text-sm font-medium">{session.targetDirection ?? '—'}</p>
+              <p className="text-gray-200 text-sm font-medium">{session.targetDirection ?? '-'}</p>
             </div>
             <button
               onClick={handleBuildGraph}
@@ -297,7 +382,7 @@ export default function ChatPage({
                 onClick={() => window.dispatchEvent(new CustomEvent('goto', { detail: 'graph' }))}
                 className="text-violet-400 hover:text-violet-300 text-xs"
               >
-                View graph →
+                View graph &gt;
               </button>
             )}
           </div>
@@ -323,7 +408,7 @@ export default function ChatPage({
             }}
             className="bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-3 py-2 rounded-lg transition-colors"
           >
-            Run Match →
+            Run Match &gt;
           </button>
         )}
       </div>
@@ -342,6 +427,14 @@ export default function ChatPage({
           )}
           <div ref={bottomRef} />
         </div>
+
+        {session.pendingQuestion && (
+          <StructuredAnswerPanel
+            question={session.pendingQuestion}
+            disabled={isLoading}
+            onSubmit={handleStructuredSubmit}
+          />
+        )}
 
         {/* Input */}
         <div className="border-t border-gray-800 px-4 py-4">
@@ -387,8 +480,8 @@ function MessageBubble({ role, content }: { role: string; content: string }) {
 }
 
 function MarkdownText({ text }: { text: string }) {
-  // Simple bold and newline rendering
-  const parts = text.split('\n')
+  const cleanedText = sanitizeDisplayText(text)
+  const parts = cleanedText.split('\n')
   return (
     <>
       {parts.map((line, i) => {
@@ -407,6 +500,158 @@ function MarkdownText({ text }: { text: string }) {
   )
 }
 
+function sanitizeDisplayText(text: string): string {
+  return text
+    .replace(/\?{2,}/g, '')
+    .replace(/[\u0080-\u009f]/g, '')
+    .replace(/[\ue000-\uf8ff]/g, '')
+    .replace(/\s+([,.])/g, '$1')
+    .trim()
+}
+
+function StructuredAnswerPanel({
+  question,
+  disabled,
+  onSubmit,
+}: {
+  question: StructuredQuestion
+  disabled: boolean
+  onSubmit: (optionIds: string[], manualEntries: string[]) => void
+}) {
+  const isMulti = question.format === 'multi_select'
+  const [selected, setSelected] = useState<string[]>([])
+  const [manual, setManual] = useState('')
+
+  useEffect(() => {
+    setSelected([])
+    setManual('')
+  }, [question.id])
+
+  const toggle = (id: string) => {
+    setSelected((prev) =>
+      isMulti
+        ? prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+        : prev.includes(id) ? [] : [id]
+    )
+  }
+
+  const groups = Array.from(new Set(question.options.map((o) => o.group ?? '')))
+  // Single-select (role) manual box is one value; multi-select (skills) stays comma-separated.
+  const manualEntries = (isMulti ? manual.split(',') : [manual])
+    .map((str) => str.trim())
+    .filter(Boolean)
+  const canSubmit = !disabled && (selected.length > 0 || manualEntries.length > 0)
+
+  // Typeahead hints: match what the candidate is typing against the seed
+  // options. Swap this local filter for an ESCO autocomplete fetch later
+  // (the StructuredOption.source field already supports an 'esco' origin).
+  const currentToken = (isMulti ? manual.split(',').pop() ?? '' : manual).trim().toLowerCase()
+  const suggestions = question.allowManualEntry && currentToken.length >= 1
+    ? question.options
+        .filter((o) => !selected.includes(o.id) && o.label.toLowerCase().includes(currentToken))
+        .slice(0, 6)
+    : []
+
+  const pickSuggestion = (id: string) => {
+    setSelected((prev) => (isMulti ? (prev.includes(id) ? prev : [...prev, id]) : [id]))
+    if (isMulti) {
+      const tokens = manual.split(',')
+      tokens.pop()
+      setManual(tokens.length ? tokens.join(',').replace(/\s*$/, '') + ', ' : '')
+    } else {
+      setManual('')
+    }
+  }
+
+  return (
+    <div className="border-t border-gray-800 px-4 py-4">
+      <div className="max-w-3xl mx-auto">
+        <p className="text-xs text-gray-500 mb-2">
+          {isMulti ? 'Select all that apply' : 'Choose one'}
+          {question.allowManualEntry ? ' - or type your own below' : ''}
+        </p>
+        <div className="flex flex-col gap-3">
+          {groups.map((group) => (
+            <div key={group || 'default'}>
+              {group && (
+                <p className="text-[11px] uppercase tracking-wider text-gray-600 mb-1.5">{group}</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {question.options
+                  .filter((o) => (o.group ?? '') === group)
+                  .map((o) => {
+                    const active = selected.includes(o.id)
+                    return (
+                      <button
+                        key={o.id}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => toggle(o.id)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border transition-colors disabled:opacity-50 ${
+                          active
+                            ? 'bg-violet-600 border-violet-500 text-white'
+                            : 'bg-gray-900 border-gray-700 text-gray-300 hover:border-violet-600'
+                        }`}
+                      >
+                        {active && <Check size={13} />}
+                        {o.label}
+                      </button>
+                    )
+                  })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {question.allowManualEntry && (
+          <div className="relative mt-3">
+            <input
+              value={manual}
+              onChange={(e) => setManual(e.target.value)}
+              disabled={disabled}
+              placeholder={
+                isMulti
+                  ? 'Add your own (comma-separated)...'
+                  : question.id === 'sq_domain'
+                  ? 'Type your field (e.g. Logistics, Law)...'
+                  : 'Type your role (e.g. Software Engineer)...'
+              }
+              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-violet-600"
+            />
+            {suggestions.length > 0 && (
+              <div className="absolute z-10 left-0 right-0 bottom-full mb-1 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden shadow-xl">
+                {suggestions.map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => pickSuggestion(o.id)}
+                    className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-violet-600/20 hover:text-white flex items-center gap-2"
+                  >
+                    <Search size={12} className="text-gray-500" />
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="mt-3 flex justify-end">
+          <button
+            type="button"
+            onClick={() => onSubmit(selected, manualEntries)}
+            disabled={!canSubmit}
+            className="bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+          >
+            <ListChecks size={14} />
+            Submit
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function capitalise(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
@@ -418,4 +663,18 @@ function delay(ms: number) {
 function countCandidateAnswers(priorMessages: ChatMessage[], latestUserMessage: string) {
   const priorUserMessages = priorMessages.filter(m => m.role === 'user' && m.content.trim().length > 0)
   return priorUserMessages.length + (latestUserMessage.trim() ? 1 : 0)
+}
+
+function resolveRoleSelection(question: StructuredQuestion, answer: StructuredAnswer): string | null {
+  if (!question.id.startsWith('sq_role_')) return null
+  if (answer.selectedLabels[0]) return answer.selectedLabels[0]
+  return answer.manualEntries[0]?.trim() || null
+}
+
+// A picked domain option carries the CandidateDomain enum as its id. Manual
+// free-text fields return null here and are mapped to the closest domain by
+// the model on the next turn.
+function resolveDomainSelection(question: StructuredQuestion, answer: StructuredAnswer): CandidateDomain | null {
+  if (question.id !== 'sq_domain') return null
+  return (answer.selectedOptionIds[0] as CandidateDomain) || null
 }

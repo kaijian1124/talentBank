@@ -6,6 +6,7 @@ import type {
   CandidateCapabilityGraph, CandidateDomain,
 } from '../types'
 import type { IntakeProgress } from '../types'
+import type { IntakePhase, StructuredAnswer, StructuredQuestion } from '../types/llmContract'
 
 interface SessionStore {
   session: UserSession | null
@@ -16,12 +17,21 @@ interface SessionStore {
 
   // actions
   initSession: () => void
+  restoreSession: (session: UserSession) => void
   setUserType: (type: UserType) => void
   addMessage: (role: 'user' | 'assistant', content: string) => void
   setProfile: (profile: CandidateProfile | CompanyProfile) => void
   setGraph: (graph: TalentGraph) => void
   setCapabilityGraph: (graph: CandidateCapabilityGraph) => void
-  setCandidateMeta: (meta: { domain?: CandidateDomain | null; targetDirection?: string | null; readyToBuild?: boolean }) => void
+  setCandidateMeta: (meta: {
+    domain?: CandidateDomain | null
+    targetDirection?: string | null
+    readyToBuild?: boolean
+    phase?: IntakePhase
+    pendingQuestion?: StructuredQuestion | null
+  }) => void
+  addStructuredAnswer: (answer: StructuredAnswer) => void
+  clearPendingQuestion: () => void
   setMatchResult: (result: MatchResult) => void
   incrementStep: () => void
   setLoading: (val: boolean) => void
@@ -56,9 +66,21 @@ function makeSession(): UserSession {
     candidateDomain: null,
     targetDirection: null,
     readyToBuild: false,
+    intakePhase: 'anchor',
+    structuredAnswers: [],
+    pendingQuestion: null,
   }
 }
 
+function progressFromSession(session: UserSession): IntakeProgress {
+  return {
+    roleDetected: session.userType !== 'unknown',
+    profileExtracted: Boolean(session.structuredProfile || session.candidateDomain || session.targetDirection),
+    claimsVerified: session.structuredAnswers.length > 0 || Boolean(session.capabilityGraph),
+    graphGenerated: Boolean(session.graph || session.capabilityGraph),
+    matchReady: Boolean(session.matchResult),
+  }
+}
 export const useSessionStore = create<SessionStore>((set, get) => ({
   session: null,
   progress: { ...defaultProgress },
@@ -69,6 +91,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   initSession: () => set({
     session: makeSession(),
     progress: { ...defaultProgress },
+    isLoading: false,
+    isVerifying: false,
+    verifyingSkill: null,
+  }),
+  restoreSession: (restoredSession) => set({
+    session: restoredSession,
+    progress: progressFromSession(restoredSession),
     isLoading: false,
     isVerifying: false,
     verifyingSkill: null,
@@ -117,8 +146,24 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           candidateDomain: meta.domain !== undefined ? meta.domain : state.session.candidateDomain,
           targetDirection: meta.targetDirection !== undefined ? meta.targetDirection : state.session.targetDirection,
           readyToBuild: meta.readyToBuild !== undefined ? meta.readyToBuild : state.session.readyToBuild,
+          intakePhase: meta.phase !== undefined ? meta.phase : state.session.intakePhase,
+          pendingQuestion: meta.pendingQuestion !== undefined ? meta.pendingQuestion : state.session.pendingQuestion,
         }
       : null,
+  })),
+
+  addStructuredAnswer: (answer) => set(state => ({
+    session: state.session
+      ? {
+          ...state.session,
+          structuredAnswers: [...state.session.structuredAnswers, answer],
+          updatedAt: Date.now(),
+        }
+      : null,
+  })),
+
+  clearPendingQuestion: () => set(state => ({
+    session: state.session ? { ...state.session, pendingQuestion: null } : null,
   })),
 
   setMatchResult: (result) => set(state => ({
