@@ -2,6 +2,15 @@
 import { Router } from 'express'
 import type { Request, Response } from 'express'
 import { getOpenAIClient, OPENAI_MODEL } from '../openaiClient'
+
+function extractJson(text: string): string | null {
+  if (!text || !text.trim()) return null
+  const trimmed = text.trim()
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return trimmed
+  const codeBlock = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/)
+  if (codeBlock) return codeBlock[1].trim()
+  return null
+}
 import { buildGraphBuildInput, buildNextQuestionInput } from '../prompts'
 import { sanitizeGraphBuildResponse, validateTurnRequest } from '../validation'
 import { buildNextQuestionResponse } from '../structuredOptions'
@@ -56,17 +65,26 @@ candidateRouter.post('/next-question', async (req: Request, res: Response) => {
     })
 
     let accumulated = ''
+    let sawDelta = false
     for await (const event of stream) {
       if (event.type === 'response.output_text.delta') {
+        sawDelta = true
         accumulated += event.delta
         send('delta', { text: event.delta })
+      } else if (!sawDelta) {
+        console.log('[api/candidate/next-question] stream event:', event.type, JSON.stringify(event).slice(0, 300))
       }
     }
 
+    console.log('[api/candidate/next-question] accumulated length:', accumulated.length)
+    console.log('[api/candidate/next-question] accumulated preview:', accumulated.slice(0, 200))
+
     let llmOutput: NextQuestionLLMOutput
     try {
-      llmOutput = JSON.parse(accumulated) as NextQuestionLLMOutput
+      const jsonText = extractJson(accumulated) ?? accumulated
+      llmOutput = JSON.parse(jsonText) as NextQuestionLLMOutput
     } catch {
+      console.error('[api/candidate/next-question] JSON parse failed. Raw accumulated:', accumulated)
       send('error', { error: 'Failed to parse model output as JSON.' })
       res.end()
       return
@@ -108,10 +126,15 @@ candidateRouter.post('/build-graph', async (req: Request, res: Response) => {
       },
     })
 
+    console.log('[api/candidate/build-graph] output_text length:', response.output_text?.length ?? 0)
+    console.log('[api/candidate/build-graph] output_text preview:', response.output_text?.slice(0, 200) ?? 'undefined')
+
     let result: GraphBuildResponse
     try {
-      result = JSON.parse(response.output_text) as GraphBuildResponse
+      const jsonText = extractJson(response.output_text) ?? response.output_text
+      result = JSON.parse(jsonText) as GraphBuildResponse
     } catch {
+      console.error('[api/candidate/build-graph] JSON parse failed. Raw output_text:', response.output_text)
       res.status(502).json({ error: 'Failed to parse model output as JSON.' })
       return
     }
