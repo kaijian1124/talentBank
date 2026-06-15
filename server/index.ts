@@ -9,10 +9,10 @@ dotenv.config({ path: '.env.local' })
 dotenv.config()
 import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
-import { candidateRouter } from './routes/candidate'
-import { companyRouter } from './routes/company'
-import { matchingRouter } from './routes/matching'
-import { OPENAI_MODEL } from './openaiClient'
+import { candidateRouter } from './routes/candidate.js'
+import { companyRouter } from './routes/company.js'
+import { matchingRouter } from './routes/matching.js'
+import { OPENAI_MODEL } from './openaiClient.js'
 
 const PORT = Number(process.env.PORT) || 8787
 

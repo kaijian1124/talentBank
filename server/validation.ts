@@ -6,8 +6,8 @@ import type {
   GraphSummaryItem,
   IntakePhase,
   StructuredAnswer,
-} from '../src/types/llmContract'
-import type { CapabilityEdge, CapabilityNode } from '../src/types'
+} from '../src/types/llmContract.js'
+import type { CapabilityEdge, CapabilityNode } from '../src/types/index.js'
 
 const SOFT_SKILL_LABELS = new Set([
   'communication',

@@ -9,8 +9,8 @@ import type {
   NextQuestionResponse,
   StructuredOption,
   StructuredQuestion,
-} from '../src/types/llmContract'
-import type { CandidateDomain } from '../src/types'
+} from '../src/types/llmContract.js'
+import type { CandidateDomain } from '../src/types/index.js'
 import {
   DOMAIN_LABELS,
   domainOptions,
@@ -18,7 +18,7 @@ import {
   resolveRole,
   roleOptions,
   roleSkillOptions,
-} from '../src/data/skillSeed'
+} from '../src/data/skillSeed.js'
 
 function toDomainQuestion(prompt: string): StructuredQuestion {
   const options: StructuredOption[] = domainOptions().map((d) => ({
@@ -60,8 +60,7 @@ function toRoleQuestion(domain: CandidateDomain, prompt: string): StructuredQues
 
 function toSkillsQuestion(
   domain: CandidateDomain,
-  roleId: string,
-  prompt: string
+  roleId: string
 ): StructuredQuestion {
   const role = getRole(domain, roleId)
   const options: StructuredOption[] = roleSkillOptions(domain, roleId).map((s) => ({
@@ -83,8 +82,7 @@ function toSkillsQuestion(
 }
 function toCustomRoleSkillsQuestion(
   domain: CandidateDomain,
-  targetDirection: string,
-  prompt: string
+  targetDirection: string
 ): StructuredQuestion {
   return {
     id: `sq_skills_${domain}_custom_${slugify(targetDirection)}`,
@@ -163,8 +161,8 @@ export function assembleStructuredQuestion(
       // If a role is not in our seed taxonomy but the model considers
       // it a real target direction, continue with a manual skill checklist.
       const targetDirection = llm.targetDirection ?? req.targetDirection ?? null
-      if (roleId) return toSkillsQuestion(domain, roleId, prompt)
-      if (targetDirection) return toCustomRoleSkillsQuestion(domain, targetDirection, prompt)
+      if (roleId) return toSkillsQuestion(domain, roleId)
+      if (targetDirection) return toCustomRoleSkillsQuestion(domain, targetDirection)
       return toRoleQuestion(domain, '')
     }
     default:

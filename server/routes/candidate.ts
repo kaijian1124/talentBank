@@ -1,7 +1,7 @@
 // Candidate capability endpoints
 import { Router } from 'express'
 import type { Request, Response } from 'express'
-import { getOpenAIClient, OPENAI_MODEL } from '../openaiClient'
+import { getOpenAIClient, OPENAI_MODEL } from '../openaiClient.js'
 
 function extractJson(text: string): string | null {
   if (!text || !text.trim()) return null
@@ -11,17 +11,17 @@ function extractJson(text: string): string | null {
   if (codeBlock) return codeBlock[1].trim()
   return null
 }
-import { buildGraphBuildInput, buildNextQuestionInput } from '../prompts'
-import { sanitizeGraphBuildResponse, validateTurnRequest } from '../validation'
-import { buildNextQuestionResponse } from '../structuredOptions'
+import { buildGraphBuildInput, buildNextQuestionInput } from '../prompts.js'
+import { sanitizeGraphBuildResponse, validateTurnRequest } from '../validation.js'
+import { buildNextQuestionResponse } from '../structuredOptions.js'
 import {
   GRAPH_BUILD_JSON_SCHEMA,
   NEXT_QUESTION_JSON_SCHEMA,
-} from '../../src/types/llmContract'
+} from '../../src/types/llmContract.js'
 import type {
   GraphBuildResponse,
   NextQuestionLLMOutput,
-} from '../../src/types/llmContract'
+} from '../../src/types/llmContract.js'
 
 const NEXT_QUESTION_MAX_TOKENS = 400
 const GRAPH_BUILD_MAX_TOKENS = 2000

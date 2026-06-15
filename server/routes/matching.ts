@@ -1,6 +1,6 @@
 ﻿import { Router } from 'express'
 import type { Request, Response } from 'express'
-import { getOpenAIClient } from '../openaiClient'
+import { getOpenAIClient } from '../openaiClient.js'
 
 const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small'
 const ALLOWED_EMBEDDING_MODELS = new Set(['text-embedding-3-small', 'text-embedding-3-large'])

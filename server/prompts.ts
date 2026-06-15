@@ -3,13 +3,13 @@
 // of every request (maximizing OpenAI's automatic cached-input discount),
 // while only the small per-turn context changes.
 
-import type { CandidateTurnRequest } from '../src/types/llmContract'
+import type { CandidateTurnRequest } from '../src/types/llmContract.js'
 import {
   CANDIDATE_DOMAINS,
   CAPABILITY_EDGE_TYPES,
   CAPABILITY_NODE_TYPES,
-} from '../src/types/llmContract'
-import { DOMAIN_LABELS, domainOptions, roleOptions } from '../src/data/skillSeed'
+} from '../src/types/llmContract.js'
+import { DOMAIN_LABELS, domainOptions, roleOptions } from '../src/data/skillSeed.js'
 
 export const NEXT_QUESTION_SYSTEM = [
   'You are TalentBank, an adaptive interviewer that turns a fresh graduate\'s real',

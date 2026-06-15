@@ -1,9 +1,9 @@
 ﻿import { Router } from 'express'
 import type { Request, Response } from 'express'
-import { getOpenAIClient, OPENAI_MODEL } from '../openaiClient'
-import { buildCompanyJobPostingInput } from '../companyPrompts'
-import { COMPANY_JOB_POSTING_JSON_SCHEMA } from '../../src/types/llmContract'
-import type { CompanyJobPostingRequest, CompanyJobPostingResponse } from '../../src/types/llmContract'
+import { getOpenAIClient, OPENAI_MODEL } from '../openaiClient.js'
+import { buildCompanyJobPostingInput } from '../companyPrompts.js'
+import { COMPANY_JOB_POSTING_JSON_SCHEMA } from '../../src/types/llmContract.js'
+import type { CompanyJobPostingRequest, CompanyJobPostingResponse } from '../../src/types/llmContract.js'
 
 const COMPANY_JOB_POSTING_MAX_TOKENS = 1200
 

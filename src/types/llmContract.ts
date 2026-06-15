@@ -16,7 +16,7 @@ import type {
   MeaningfulExperience,
   MeaningfulExperienceKind,
   ChatMessage,
-} from './index'
+} from './index.js'
 
 // ??? Shared enum value lists (single source of truth for schemas) ??
 export const CANDIDATE_DOMAINS: CandidateDomain[] = [

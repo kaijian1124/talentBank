@@ -6,7 +6,7 @@
 // runtime the LLM augments these options and candidates may add manual
 // entries (validated by the LLM).
 
-import type { CandidateDomain } from '../types'
+import type { CandidateDomain } from '../types/index.js'
 
 export interface SeedRole {
   id: string

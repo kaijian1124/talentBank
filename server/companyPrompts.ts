@@ -1,4 +1,4 @@
-﻿import type { CompanyJobPostingRequest } from '../src/types/llmContract'
+import type { CompanyJobPostingRequest } from '../src/types/llmContract.js'
 
 const COMPANY_JOB_POSTING_SYSTEM = [
   'You are TalentBank Career OS for employers. Your job is to help non-expert HR users turn rough hiring needs into a clear job_postings row.',
