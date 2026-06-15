@@ -378,7 +378,7 @@ export function CapabilityGraphView({
   domain,
   target,
   backLabel = 'Back to Conversation',
-  footerText = 'Keep chatting to refine the graph',
+  footerText = 'Continue the chat to add real experiences and raise your confidence scores',
   heightClass = 'h-[calc(100vh-57px)]',
   onBack = () => window.dispatchEvent(new CustomEvent('goto', { detail: 'chat' })),
 }: {

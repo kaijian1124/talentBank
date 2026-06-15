@@ -11,6 +11,7 @@ import type {
 } from '../types/llmContract'
 import type {
   CandidateCapabilityGraph,
+  CandidateDomain,
   CapabilityEdge,
   CapabilityNode,
   CapabilityNodeType,
@@ -203,6 +204,67 @@ export function mergeGraphDelta(
 export function toGraphSummary(graph: CandidateCapabilityGraph | null): GraphSummaryItem[] {
   if (!graph) return []
   return graph.nodes.map((n) => ({ id: n.id, label: n.label, type: n.type }))
+}
+
+// Compact edge list so the model can see what is ALREADY connected (and what
+// is still siloed) and add links to existing nodes instead of duplicating them.
+export function toGraphEdgeSummary(
+  graph: CandidateCapabilityGraph | null
+): Array<{ from: string; to: string; type: string }> {
+  if (!graph) return []
+  return graph.edges.map((e) => ({ from: e.from, to: e.to, type: e.type }))
+}
+
+// Deterministic guarantee that the candidate's goal role/position is always a
+// node in the graph, and that loose capability/trait/credential/preference
+// nodes are wired toward it. The model sometimes omits the target_direction
+// node or leaves selected skills floating; this keeps the graph anchored and
+// connected regardless of model output.
+export function ensureTargetDirectionNode(
+  graph: CandidateCapabilityGraph,
+  targetDirection: string | null | undefined,
+  domain: CandidateDomain | null | undefined
+): CandidateCapabilityGraph {
+  const target = (targetDirection ?? '').trim()
+  if (!target) return graph
+
+  const nodes = [...graph.nodes]
+  const edges = [...graph.edges]
+
+  let targetNode = nodes.find((n) => n.type === 'target_direction')
+  if (!targetNode) {
+    targetNode = {
+      id: `target_${normaliseLabel(target)}`,
+      type: 'target_direction',
+      label: target,
+      domain: domain ?? undefined,
+      confidence: 0.5,
+      proficiency: null,
+      description: `Target role / position: ${target}.`,
+    }
+    nodes.push(targetNode)
+  }
+
+  const linkedToTarget = new Set<string>()
+  for (const e of edges) {
+    if (e.to === targetNode.id) linkedToTarget.add(e.from)
+    if (e.from === targetNode.id) linkedToTarget.add(e.to)
+  }
+  for (const n of nodes) {
+    if (n.id === targetNode.id || linkedToTarget.has(n.id)) continue
+    if (n.type !== 'capability' && n.type !== 'trait' && n.type !== 'credential' && n.type !== 'preference') {
+      continue
+    }
+    edges.push({
+      id: uuidv4(),
+      from: n.id,
+      to: targetNode.id,
+      type: n.type === 'preference' ? 'prefers' : 'transfers_to',
+      reason: `${n.label} contributes toward ${target}.`,
+    })
+  }
+
+  return { ...graph, nodes, edges }
 }
 
 // ??? internals ??????????????????????????????????????????????????????

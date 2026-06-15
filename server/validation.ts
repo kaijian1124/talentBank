@@ -2,6 +2,7 @@
 import type {
   CandidateTurnRequest,
   GraphBuildResponse,
+  GraphEdgeSummaryItem,
   GraphSummaryItem,
   IntakePhase,
   StructuredAnswer,
@@ -67,6 +68,9 @@ export function validateTurnRequest(body: unknown): ValidationResult<CandidateTu
     phase: b.phase as IntakePhase | undefined,
     graphSummary: Array.isArray(b.graphSummary)
       ? (b.graphSummary as GraphSummaryItem[])
+      : [],
+    graphEdges: Array.isArray(b.graphEdges)
+      ? (b.graphEdges as GraphEdgeSummaryItem[])
       : [],
     domain: b.domain as CandidateTurnRequest['domain'],
     targetDirection: (b.targetDirection as string | null | undefined) ?? null,

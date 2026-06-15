@@ -138,12 +138,21 @@ export interface GraphSummaryItem {
   type: CapabilityNodeType
 }
 
+// Existing edges, so the model can see what is already connected vs. siloed
+// and reuse/extend the graph instead of duplicating nodes.
+export interface GraphEdgeSummaryItem {
+  from: string
+  to: string
+  type: string
+}
+
 export interface CandidateTurnRequest {
   messages: ChatMessage[]
   latestUserMessage: string
   structuredAnswers?: StructuredAnswer[]
   phase?: IntakePhase
   graphSummary?: GraphSummaryItem[]
+  graphEdges?: GraphEdgeSummaryItem[]
   domain?: CandidateDomain
   targetDirection?: string | null
 }

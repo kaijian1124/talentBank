@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSessionStore } from './store/sessionStore'
 import type { AccountUser, CandidateCapabilityGraph, CompanyProfile, JobPosting, UserType } from './types'
 import { getAccountUser, markIntakeCompleted, saveCandidateGraph, saveIntakeSession, updateProfileRole } from './services/accountService'
@@ -28,6 +28,14 @@ function App() {
   const [accountUser, setAccountUser] = useState<AccountUser | null>(null)
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured)
   const [forcePage, setForcePage] = useState<Page | null>(null)
+  // Tracks the currently loaded account id so we can ignore auth events that
+  // do not change the user (e.g. TOKEN_REFRESHED / SIGNED_IN re-emitted when
+  // the browser tab regains focus). Without this, refocusing the tab wiped
+  // navigation + session and bounced the user back to the chat intake.
+  const accountUserIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    accountUserIdRef.current = accountUser?.id ?? null
+  }, [accountUser])
 
   useEffect(() => {
     document.title = 'Talentbank Career OS'
@@ -46,8 +54,26 @@ function App() {
       setAuthLoading(false)
     })
 
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, sessionData) => {
+    const { data: listener } = supabase.auth.onAuthStateChange(async (event, sessionData) => {
+      // These events fire on tab refocus / silent token refresh and must NOT
+      // reset navigation or the in-progress intake session.
+      if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') {
+        return
+      }
+
+      if (event === 'SIGNED_OUT') {
+        setAccountUser(null)
+        setForcePage(null)
+        useSessionStore.getState().resetSession()
+        return
+      }
+
+      // SIGNED_IN (and similar). Supabase re-emits SIGNED_IN when the tab
+      // regains focus; only do a full reset when the user actually changed.
       const user = await getAccountUser(sessionData?.user ?? null)
+      if (user?.id && user.id === accountUserIdRef.current) {
+        return
+      }
       setAccountUser(user)
       setForcePage(null)
       useSessionStore.getState().resetSession()
@@ -122,6 +148,14 @@ function App() {
   }
 
   const handleStartIntake = () => {
+    // Prefer the live in-memory session if it already has a conversation, so
+    // navigating Dashboard <-> Chat resumes exactly where the user left off
+    // instead of reloading a stale DB snapshot captured at login.
+    const live = useSessionStore.getState().session
+    if (live && live.messages.length > 0 && !accountUser?.intakeCompleted) {
+      setForcePage(null)
+      return
+    }
     if (accountUser?.intakeSession && !accountUser.intakeCompleted) restoreSession(accountUser.intakeSession)
     else initSession()
     setForcePage(null)
@@ -207,7 +241,7 @@ function App() {
         <div className="flex items-center gap-4 text-sm">
           {accountUser?.role && (
             <button
-              onClick={() => { useSessionStore.getState().resetSession(); setForcePage('dashboard') }}
+              onClick={() => setForcePage('dashboard')}
               className="text-gray-400 hover:text-white transition-colors"
             >
               Dashboard

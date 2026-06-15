@@ -34,7 +34,9 @@ function toDomainQuestion(prompt: string): StructuredQuestion {
     format: 'single_select',
     phase: 'anchor',
     options,
-    allowManualEntry: false,
+    // Let candidates whose field is not listed type it in; the model maps the
+    // free text to the closest domain on the next turn.
+    allowManualEntry: true,
   }
 }
 
@@ -131,7 +133,23 @@ export function assembleStructuredQuestion(
     llm.optionRequest.domain ?? llm.detectedDomain ?? req.domain ?? 'general'
   const prompt = llm.nextQuestion
 
-  switch (llm.optionRequest.kind) {
+  // Forward-progress guard: the model is stateless and can wrongly ask for an
+  // earlier step again (e.g. re-asking the role after it was chosen), which the
+  // client would faithfully re-render as a loop. We detect what the candidate
+  // has ALREADY answered and never re-show those structured questions.
+  const answers = req.structuredAnswers ?? []
+  const answeredDomain = Boolean(req.domain) || answers.some((a) => a.questionId === 'sq_domain')
+  const answeredRole = Boolean(req.targetDirection) || answers.some((a) => a.questionId.startsWith('sq_role_'))
+  const answeredSkills = answers.some((a) => a.questionId.startsWith('sq_skills_'))
+
+  let kind = llm.optionRequest.kind
+  if (kind === 'none') kind = answeredDomain || req.domain ? 'role' : 'domain'
+  if (kind === 'domain' && answeredDomain) kind = answeredRole ? 'skills_for_role' : 'role'
+  if (kind === 'role' && answeredRole) kind = 'skills_for_role'
+  // Skills already chosen -> stop asking structured questions and move to open depth.
+  if (kind === 'skills_for_role' && answeredSkills) return null
+
+  switch (kind) {
     case 'domain':
       return toDomainQuestion(prompt)
     case 'role':
@@ -149,11 +167,8 @@ export function assembleStructuredQuestion(
       if (targetDirection) return toCustomRoleSkillsQuestion(domain, targetDirection, prompt)
       return toRoleQuestion(domain, '')
     }
-    case 'none':
     default:
-      // Format implied a structured question but no option source was set.
-      // Fall back to the most useful anchor question.
-      return req.domain ? toRoleQuestion(domain, prompt) : toDomainQuestion(prompt)
+      return null
   }
 }
 
@@ -165,12 +180,18 @@ export function buildNextQuestionResponse(
 ): NextQuestionResponse {
   const structuredQuestion = assembleStructuredQuestion(llm, req)
   return {
-    phase: llm.phase,
-    questionFormat: structuredQuestion?.format ?? llm.questionFormat,
+    // Keep the reported phase consistent with the question we actually emit so
+    // the next turn's context is accurate.
+    phase: structuredQuestion?.phase ?? llm.phase,
+    // No structured question means the candidate answers in free text, i.e. open.
+    questionFormat: structuredQuestion ? structuredQuestion.format : 'open',
     nextQuestion: structuredQuestion?.prompt ?? llm.nextQuestion,
     structuredQuestion,
     detectedDomain: llm.detectedDomain,
-    targetDirection: llm.targetDirection,
+    // Never regress a known target to null: once the role is chosen it must
+    // persist so build-graph can create the target_direction node (and the
+    // edges that point at it). The model sometimes omits it on later turns.
+    targetDirection: llm.targetDirection ?? req.targetDirection ?? null,
     readyToBuild: llm.readyToBuild,
     coverageNote: llm.coverageNote ?? undefined,
   }

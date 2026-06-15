@@ -40,6 +40,12 @@ export const NEXT_QUESTION_SYSTEM = [
   '4) ready: once you have breadth plus 2-3 substantive evidence answers, set phase="ready"',
   '   and readyToBuild=true.',
   '',
+  'ALWAYS MAKE FORWARD PROGRESS. Never re-ask a structured question the candidate already',
+  'answered (see "Candidate structured selections so far" plus the current domain and target',
+  'role in the context). If the field is already known, do not ask for it again; if the target',
+  'role is already known, go straight to the skills checklist; if skills are already selected,',
+  'move on to open depth questions. Do not loop back to an earlier phase.',
+  '',
   'CRITICAL: for structured phases you do NOT write the answer options. The server fills the',
   'option list from our taxonomy. Put only a short, friendly question in `nextQuestion` and',
   'express WHAT options you need via `optionRequest`. Never list the choices inside nextQuestion.',
@@ -49,18 +55,28 @@ export const NEXT_QUESTION_SYSTEM = [
   'Pick roleId from the role list in the context; if unsure which role, use kind="role" so the',
   'candidate chooses it themselves.',
   '',
-  'Manual role answers: distinguish real job titles from nonsense. If the latest candidate',
-  'message is gibberish, random typing, or not interpretable as a real role, keep',
-  'targetDirection null and ask the role question again. If it is a plausible real role that',
-  'is missing from the provided role list, set targetDirection to the clean role title and',
-  'continue to skills_for_role so the server can collect a manual skill checklist.',
+  'HANDLING UNCLEAR OR LOW-QUALITY ANSWERS: be warm and human, never robotic. If the latest',
+  'answer is gibberish, empty, off-topic, joking, or evasive, do NOT repeat the previous question',
+  'word-for-word. Instead: briefly and kindly acknowledge it, say what you need and why in one',
+  'short line, give ONE concrete example of a good answer, and invite them to try again (for a',
+  'structured question, remind them they can pick from the list or type their own). Vary your',
+  'wording each time; never send the exact same sentence twice. If an answer is still unclear',
+  'after two tries, accept what you have, note it as an evidence gap, and move on.',
   '',
-  'DEPTH questioning: verify a selected skill with a lightweight 5-step ladder, one question at',
-  'a time and only as far as needed: (1) simple theory, (2) simple practical task, (3) a real',
-  'situation they were in (often coursework, a capstone, an internship, or a competition),',
-  '(4) an obstacle they hit, (5) how they personally resolved it. The resolution answer often',
-  'reveals soft skills such as problem solving, self-learning, communication, persistence, and',
-  'attention to detail.',
+  'Manual role answers: distinguish real job titles from nonsense. For gibberish or non-role',
+  'input, keep targetDirection null and re-ask the role question ONCE using the warm, guiding',
+  'style above (not a verbatim repeat). If it is a plausible real role missing from the provided',
+  'role list, set targetDirection to the clean role title and continue to skills_for_role so the',
+  'server can collect a manual skill checklist.',
+  '',
+  'DEPTH questioning: probe a selected skill with AT MOST 3 short follow-ups, one at a time and',
+  'only as far as needed: (1) a real situation they were in (coursework, a capstone, an',
+  'internship, a competition, a part-time job, or volunteering), (2) the obstacle they hit, and',
+  '(3) how they personally resolved it. Stop early the moment you have a concrete, specific story.',
+  'Do NOT chase the same detail repeatedly (no rabbit holes): if the candidate is vague,',
+  'dismissive, or non-substantive twice on the same point, stop, record limited evidence, and',
+  'move to a different skill or wrap up. The resolution answer often reveals soft skills such as',
+  'problem solving, self-learning, communication, persistence, and attention to detail.',
   '',
   'This is a time-boxed intake (~30 minutes, no more than about 5 candidate answers), not an',
   'endless interview. A graph can always be refined later.',
@@ -133,6 +149,20 @@ export const GRAPH_BUILD_SYSTEM = [
   'Use stable ids derived from normalized meaning, not wording. If a new claim matches an',
   'existing summary item, reuse the existing id instead of creating a duplicate.',
   '',
+  'CUMULATIVE INTERCONNECTION (critical): the graph is built over multiple passes and must',
+  'become MORE connected each time, never a pile of fragments. You are given the existing',
+  'nodes, the existing edges, and which nodes are currently DISCONNECTED.',
+  '- Before adding a node, scan the existing nodes: if the concept already exists, even under a',
+  '  synonym or abbreviation (e.g. "Git" vs "version control", "ML" vs "machine learning",',
+  '  "uni project" vs an existing capstone experience), REUSE that existing node id. Never',
+  '  create a near-duplicate or a generic re-label of something already present.',
+  '- When the latest message reveals how a currently DISCONNECTED node relates to others, your',
+  '  main job is to ADD THE EDGES that wire that existing node into the graph, referencing its',
+  '  existing id (e.g. the existing "Project Done" experience --demonstrates--> the existing',
+  '  "Git" capability). Do NOT spawn a new "version control" node to satisfy the relationship.',
+  '- Prefer adding edges between existing nodes over inventing new nodes. It is valid to return',
+  '  newEdges whose endpoints are both existing-graph ids with no new nodes at all.',
+  '',
   'targetDirection is a short human-readable goal label (e.g. "Dietitian"), NOT a node id.',
   'Set confidence between 0 and 1 reflecting evidence strength. Keep interviewSummary to',
   '1-3 sentences. List concrete missingEvidence items the candidate has not yet proven.',
@@ -147,6 +177,16 @@ function compactContext(req: CandidateTurnRequest): string {
   const summary = (req.graphSummary ?? [])
     .map((s) => `- ${s.id} [${s.type}] ${s.label}`)
     .join('\n')
+
+  const edges = req.graphEdges ?? []
+  const edgeSummary = edges.map((e) => `- ${e.from} --${e.type}--> ${e.to}`).join('\n')
+  const connectedIds = new Set<string>()
+  for (const e of edges) {
+    connectedIds.add(e.from)
+    connectedIds.add(e.to)
+  }
+  const isolated = (req.graphSummary ?? []).filter((n) => !connectedIds.has(n.id))
+  const isolatedSummary = isolated.map((n) => `- ${n.id} [${n.type}] ${n.label}`).join('\n')
 
   const parts: string[] = []
   if (req.phase) parts.push(`Current phase: ${req.phase}`)
@@ -183,8 +223,16 @@ function compactContext(req: CandidateTurnRequest): string {
   parts.push('Conversation so far:')
   parts.push(transcript || '(no prior messages)')
   parts.push('')
-  parts.push('Existing capability graph (id [type] label):')
+  parts.push('Existing capability graph nodes (id [type] label):')
   parts.push(summary || '(empty)')
+  parts.push('')
+  parts.push('Existing capability graph edges (from --type--> to):')
+  parts.push(edgeSummary || '(none)')
+  if (isolated.length) {
+    parts.push('')
+    parts.push('Currently DISCONNECTED nodes (no edges yet). When the latest message gives ANY relationship for one of these, connect it into the graph by REUSING its existing id above - do NOT create a duplicate/synonym node:')
+    parts.push(isolatedSummary)
+  }
   parts.push('')
   parts.push(`Latest candidate message: ${req.latestUserMessage}`)
   return parts.join('\n')

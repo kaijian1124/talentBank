@@ -1,6 +1,6 @@
 ﻿import { useState, useRef, useEffect } from 'react'
 import { useSessionStore } from '../store/sessionStore'
-import { Send, Loader2, CheckCircle2, Circle, Zap, Network, SkipForward, Check, ListChecks } from 'lucide-react'
+import { Send, Loader2, CheckCircle2, Circle, Zap, Network, SkipForward, Check, ListChecks, Search } from 'lucide-react'
 import {
   classifyUserType, getIntakeQuestion, getIntakeLength,
   extractCompanyJobPosting, extractCompanyProfile, generateChatResponse,
@@ -10,9 +10,10 @@ import { matchCandidateToCompany } from '../services/matchingService'
 import { demoCompanyProfile } from '../services/mockData'
 import { generateCompanyJobPosting } from '../services/companyAnalysis'
 import {
-  getNextQuestion, buildCapabilityGraph, mergeGraphDelta, preserveSelfClaimedSkills, toGraphSummary,
+  getNextQuestion, buildCapabilityGraph, mergeGraphDelta, preserveSelfClaimedSkills,
+  toGraphSummary, toGraphEdgeSummary, ensureTargetDirectionNode,
 } from '../services/candidateAnalysis'
-import type { CandidateProfile, ChatMessage, CompanyProfile, JobPosting, UserType } from '../types'
+import type { CandidateDomain, CandidateProfile, ChatMessage, CompanyProfile, JobPosting, UserType } from '../types'
 import type { StructuredAnswer, StructuredQuestion } from '../types/llmContract'
 
 const MAX_CANDIDATE_INTAKE_ANSWERS = 5
@@ -56,7 +57,8 @@ export default function ChatPage({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [session?.messages])
 
-  if (!session) return null  // Candidate path (real LLM via local API)
+  if (!session) return null
+  // Candidate path (real LLM via local API)
   const handleCandidateTurn = async (text: string, priorMessages: ChatMessage[]) => {
     const s = useSessionStore.getState().session
     if (!s) return
@@ -94,8 +96,10 @@ export default function ChatPage({
           : res.nextQuestion
       )
       setCandidateMeta({
-        domain: res.detectedDomain,
-        targetDirection: res.targetDirection,
+        domain: res.detectedDomain ?? s.candidateDomain,
+        // Don't let a null from the model erase the role/domain the candidate
+        // already chose - it must survive to the build-graph step.
+        targetDirection: res.targetDirection ?? s.targetDirection,
         readyToBuild: (res.readyToBuild || questionBudgetReached) && !hasStructured,
         phase: res.phase,
         pendingQuestion: res.structuredQuestion,
@@ -121,11 +125,18 @@ export default function ChatPage({
       selectedLabels,
       manualEntries,
     }
+    const selectedDomain = resolveDomainSelection(q, answer)
     const selectedRole = resolveRoleSelection(q, answer)
     const priorMessages = s.messages
     const summaryText = picks.join(', ')
     addStructuredAnswer(answer)
     clearPendingQuestion()
+    if (selectedDomain) {
+      // Lock the field deterministically so the role checklist is built for the
+      // right domain. A manually typed field stays null here and is mapped by
+      // the model on the next turn.
+      setCandidateMeta({ domain: selectedDomain, phase: 'anchor', pendingQuestion: null })
+    }
     if (selectedRole) {
       setCandidateMeta({
         targetDirection: selectedRole,
@@ -155,14 +166,34 @@ export default function ChatPage({
         structuredAnswers: s.structuredAnswers,
         phase: s.intakePhase,
         graphSummary: toGraphSummary(s.capabilityGraph),
+        graphEdges: toGraphEdgeSummary(s.capabilityGraph),
         domain: s.candidateDomain ?? undefined,
         targetDirection: s.targetDirection ?? null,
       })
       const enrichedDelta = preserveSelfClaimedSkills(delta, s.messages)
-      const merged = mergeGraphDelta(s.capabilityGraph, enrichedDelta)
+      const merged = ensureTargetDirectionNode(
+        mergeGraphDelta(s.capabilityGraph, enrichedDelta),
+        s.targetDirection,
+        s.candidateDomain
+      )
+      const isFirstBuild = !s.capabilityGraph
       setCapabilityGraph(merged)
       await onIntakeCompleted?.(merged)
-      addMessage('assistant', `Capability graph updated: **${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening your graph...`)
+      addMessage(
+        'assistant',
+        isFirstBuild
+          ? [
+              `Your initial capability graph is ready: **${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening it now.`,
+              '',
+              'This is a **first draft** - most skills are still self-claimed. Come back to this chat anytime to make it stronger and improve your job matches:',
+              '- Share a **real experience** (a project, internship, capstone, club, or part-time job) where you used one of these skills',
+              '- Tell me about an **obstacle** you hit and how you solved it',
+              '- Add **more skills** you have',
+              '',
+              'Just type your next message below whenever you are ready, then hit **Update Capability Graph** to refresh it.',
+            ].join('\n')
+          : `Capability graph updated: **${merged.nodes.length} nodes**, **${merged.edges.length} edges**. Opening your graph...`
+      )
       window.dispatchEvent(new CustomEvent('goto', { detail: 'graph' }))
     } catch (e) {
       addMessage('assistant', `Build failed. ${(e as Error).message}`)
@@ -505,15 +536,39 @@ function StructuredAnswerPanel({
   }
 
   const groups = Array.from(new Set(question.options.map((o) => o.group ?? '')))
-  const manualEntries = manual.split(',').map((str) => str.trim()).filter(Boolean)
+  // Single-select (role) manual box is one value; multi-select (skills) stays comma-separated.
+  const manualEntries = (isMulti ? manual.split(',') : [manual])
+    .map((str) => str.trim())
+    .filter(Boolean)
   const canSubmit = !disabled && (selected.length > 0 || manualEntries.length > 0)
+
+  // Typeahead hints: match what the candidate is typing against the seed
+  // options. Swap this local filter for an ESCO autocomplete fetch later
+  // (the StructuredOption.source field already supports an 'esco' origin).
+  const currentToken = (isMulti ? manual.split(',').pop() ?? '' : manual).trim().toLowerCase()
+  const suggestions = question.allowManualEntry && currentToken.length >= 1
+    ? question.options
+        .filter((o) => !selected.includes(o.id) && o.label.toLowerCase().includes(currentToken))
+        .slice(0, 6)
+    : []
+
+  const pickSuggestion = (id: string) => {
+    setSelected((prev) => (isMulti ? (prev.includes(id) ? prev : [...prev, id]) : [id]))
+    if (isMulti) {
+      const tokens = manual.split(',')
+      tokens.pop()
+      setManual(tokens.length ? tokens.join(',').replace(/\s*$/, '') + ', ' : '')
+    } else {
+      setManual('')
+    }
+  }
 
   return (
     <div className="border-t border-gray-800 px-4 py-4">
       <div className="max-w-3xl mx-auto">
         <p className="text-xs text-gray-500 mb-2">
           {isMulti ? 'Select all that apply' : 'Choose one'}
-          {question.allowManualEntry ? ' - or add your own below' : ''}
+          {question.allowManualEntry ? ' - or type your own below' : ''}
         </p>
         <div className="flex flex-col gap-3">
           {groups.map((group) => (
@@ -549,13 +604,36 @@ function StructuredAnswerPanel({
         </div>
 
         {question.allowManualEntry && (
-          <input
-            value={manual}
-            onChange={(e) => setManual(e.target.value)}
-            disabled={disabled}
-            placeholder="Add your own (comma-separated)..."
-            className="mt-3 w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-violet-600"
-          />
+          <div className="relative mt-3">
+            <input
+              value={manual}
+              onChange={(e) => setManual(e.target.value)}
+              disabled={disabled}
+              placeholder={
+                isMulti
+                  ? 'Add your own (comma-separated)...'
+                  : question.id === 'sq_domain'
+                  ? 'Type your field (e.g. Logistics, Law)...'
+                  : 'Type your role (e.g. Software Engineer)...'
+              }
+              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-violet-600"
+            />
+            {suggestions.length > 0 && (
+              <div className="absolute z-10 left-0 right-0 bottom-full mb-1 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden shadow-xl">
+                {suggestions.map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => pickSuggestion(o.id)}
+                    className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-violet-600/20 hover:text-white flex items-center gap-2"
+                  >
+                    <Search size={12} className="text-gray-500" />
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         <div className="mt-3 flex justify-end">
@@ -591,4 +669,12 @@ function resolveRoleSelection(question: StructuredQuestion, answer: StructuredAn
   if (!question.id.startsWith('sq_role_')) return null
   if (answer.selectedLabels[0]) return answer.selectedLabels[0]
   return answer.manualEntries[0]?.trim() || null
+}
+
+// A picked domain option carries the CandidateDomain enum as its id. Manual
+// free-text fields return null here and are mapped to the closest domain by
+// the model on the next turn.
+function resolveDomainSelection(question: StructuredQuestion, answer: StructuredAnswer): CandidateDomain | null {
+  if (question.id !== 'sq_domain') return null
+  return (answer.selectedOptionIds[0] as CandidateDomain) || null
 }
