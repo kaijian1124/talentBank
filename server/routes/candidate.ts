@@ -37,6 +37,42 @@ candidateRouter.post('/next-question', async (req: Request, res: Response) => {
     return
   }
 
+  if (process.env.VERCEL === '1') {
+    try {
+      const client = getOpenAIClient()
+      const response = await client.responses.create({
+        model: OPENAI_MODEL,
+        input: buildNextQuestionInput(parsed.value),
+        max_output_tokens: NEXT_QUESTION_MAX_TOKENS,
+        text: {
+          format: {
+            type: 'json_schema',
+            name: NEXT_QUESTION_JSON_SCHEMA.name,
+            schema: NEXT_QUESTION_JSON_SCHEMA.schema,
+            strict: NEXT_QUESTION_JSON_SCHEMA.strict,
+          },
+        },
+      })
+
+      let llmOutput: NextQuestionLLMOutput
+      try {
+        const jsonText = extractJson(response.output_text) ?? response.output_text
+        llmOutput = JSON.parse(jsonText) as NextQuestionLLMOutput
+      } catch {
+        console.error('[api/candidate/next-question] JSON parse failed. Raw output_text:', response.output_text)
+        res.status(502).json({ error: 'Failed to parse model output as JSON.' })
+        return
+      }
+
+      res.json(buildNextQuestionResponse(llmOutput, parsed.value))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error'
+      const isConfig = message.includes('OPENAI_API_KEY')
+      res.status(isConfig ? 500 : 502).json({ error: message })
+    }
+    return
+  }
+
   // Set up Server-Sent Events.
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache, no-transform')

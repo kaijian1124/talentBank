@@ -52,6 +52,10 @@ export async function getNextQuestion(
     throw new Error(detail ?? `next-question failed with status ${res.status}`)
   }
 
+  if (res.headers.get('Content-Type')?.includes('application/json')) {
+    return (await res.json()) as NextQuestionResponse
+  }
+
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
