@@ -34,10 +34,20 @@ app.get('/api/health', (_req: Request, res: Response) => {
     hasKey: Boolean(process.env.OPENAI_API_KEY),
   })
 })
+app.get('/health', (_req: Request, res: Response) => {
+  res.json({
+    ok: true,
+    model: OPENAI_MODEL,
+    hasKey: Boolean(process.env.OPENAI_API_KEY),
+  })
+})
 
 app.use('/api/candidate', candidateRouter)
 app.use('/api/company', companyRouter)
 app.use('/api/matching', matchingRouter)
+app.use('/candidate', candidateRouter)
+app.use('/company', companyRouter)
+app.use('/matching', matchingRouter)
 
 // Central error handler.
 app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
